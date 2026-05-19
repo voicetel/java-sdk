@@ -39,7 +39,9 @@ class TransportTest {
     record RecordedRequest(String method, String path, String query, Map<String, String> headers, String body) {}
 
     @FunctionalInterface
-    interface Handler { void serve(HttpExchange ex) throws IOException; }
+    interface Handler {
+        void serve(HttpExchange ex, String body) throws IOException;
+    }
 
     @BeforeEach
     void start() throws Exception {
@@ -60,7 +62,7 @@ class TransportTest {
                     respond(exchange, 404, null);
                     return;
                 }
-                h.serve(exchange);
+                h.serve(exchange, body);
             } catch (Throwable t) {
                 // Surface handler-side failures as a 500 with the message —
                 // otherwise the client sees a bare connection drop and the
@@ -118,7 +120,7 @@ class TransportTest {
 
     @Test
     void sendsBearerAndUserAgentOnAuthenticatedCalls() {
-        routes.put("GET /v2.2/account", ex -> respond(ex, 200,
+        routes.put("GET /v2.2/account", (ex, body) -> respond(ex, 200,
             "{\"status\":\"success\",\"data\":{\"username\":\"1\",\"name\":\"Acme\"}}"));
         Account.Data me = client(0, "abc123").account().get();
         assertEquals("1", me.username());
@@ -131,7 +133,7 @@ class TransportTest {
 
     @Test
     void omitsAuthorizationOnRecover() {
-        routes.put("POST /v2.2/account/recovery", ex -> respond(ex, 200,
+        routes.put("POST /v2.2/account/recovery", (ex, body) -> respond(ex, 200,
             "{\"status\":\"success\",\"data\":{\"message\":\"sent\"}}"));
         Account.RecoverData r = client(0, "").account().recover(new Account.RecoverRequest("x@y.com"));
         assertEquals("sent", r.message());
@@ -161,7 +163,7 @@ class TransportTest {
             ErrorKind expected = entry.getValue();
             recorded.clear();
             routes.clear();
-            routes.put("GET /v2.2/account", ex -> respond(ex, status,
+            routes.put("GET /v2.2/account", (ex, body) -> respond(ex, status,
                 "{\"code\":\"X\",\"message\":\"boom\"}"));
             ApiError e = assertThrows(ApiError.class, () -> client(0, "k").account().get());
             assertEquals(expected, e.getKind(), "status " + status);
@@ -174,7 +176,7 @@ class TransportTest {
     @Test
     void retriesOn429ThenSucceeds() {
         AtomicInteger calls = new AtomicInteger();
-        routes.put("GET /v2.2/account", ex -> {
+        routes.put("GET /v2.2/account", (ex, body) -> {
             if (calls.incrementAndGet() == 1) {
                 ex.getResponseHeaders().set("Retry-After", "0");
                 respond(ex, 429, null);
@@ -189,7 +191,7 @@ class TransportTest {
 
     @Test
     void exhaustsRetriesAndRaisesRateLimit() {
-        routes.put("GET /v2.2/account", ex -> {
+        routes.put("GET /v2.2/account", (ex, body) -> {
             ex.getResponseHeaders().set("Retry-After", "0");
             respond(ex, 429, null);
         });
@@ -200,7 +202,7 @@ class TransportTest {
 
     @Test
     void emptyResponseDecodesToNullForNoBodyEndpoint() {
-        routes.put("DELETE /v2.2/numbers/2015551234", ex -> respond(ex, 204, null));
+        routes.put("DELETE /v2.2/numbers/2015551234", (ex, body) -> respond(ex, 204, null));
         assertDoesNotThrow(() -> client(0, "k").numbers().remove("2015551234"));
     }
 
@@ -219,14 +221,14 @@ class TransportTest {
     @Test
     void loginInstallsBearerThenAuthenticates() {
         AtomicInteger logins = new AtomicInteger();
-        routes.put("POST /v2.2/account/api-key", ex -> {
+        routes.put("POST /v2.2/account/api-key", (ex, body) -> {
             logins.incrementAndGet();
-            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            assertTrue(body.contains("\"username\":1000000001"));
+            assertTrue(body.contains("\"username\":1000000001"),
+                "body should include numeric username, was: " + body);
             assertNull(ex.getRequestHeaders().getFirst("Authorization"));
             respond(ex, 200, "{\"status\":\"success\",\"data\":{\"apikey\":\"32hex\"}}");
         });
-        routes.put("GET /v2.2/account", ex -> {
+        routes.put("GET /v2.2/account", (ex, body) -> {
             assertEquals("Bearer 32hex", ex.getRequestHeaders().getFirst("Authorization"));
             respond(ex, 200, "{\"status\":\"success\",\"data\":{\"username\":\"1000000001\"}}");
         });
@@ -242,7 +244,7 @@ class TransportTest {
 
     @Test
     void loginRejectsResponseMissingApiKey() {
-        routes.put("POST /v2.2/account/api-key", ex -> respond(ex, 200,
+        routes.put("POST /v2.2/account/api-key", (ex, body) -> respond(ex, 200,
             "{\"status\":\"success\",\"data\":{}}"));
         ApiError e = assertThrows(ApiError.class, () -> client(0, "").login(1, "p"));
         assertEquals(ErrorKind.AUTHENTICATION, e.getKind());
@@ -250,7 +252,7 @@ class TransportTest {
 
     @Test
     void aclListDecodesEnvelopeAndReturnsTypedRecord() {
-        routes.put("GET /v2.2/acl", ex -> respond(ex, 200,
+        routes.put("GET /v2.2/acl", (ex, body) -> respond(ex, 200,
             "{\"status\":\"success\",\"data\":{\"acl\":[{\"cidr\":\"203.0.113.0/24\"}]}}"));
         Acl.ListData r = client(0, "k").acl().list();
         assertEquals(1, r.acl().size());
@@ -259,9 +261,9 @@ class TransportTest {
 
     @Test
     void aclAddSendsBodyAndDecodesResponse() {
-        routes.put("POST /v2.2/acl", ex -> {
-            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            assertTrue(body.contains("\"cidr\":\"203.0.113.0/24\""));
+        routes.put("POST /v2.2/acl", (ex, body) -> {
+            assertTrue(body.contains("\"cidr\":\"203.0.113.0/24\""),
+                "body should include the CIDR, was: " + body);
             respond(ex, 200, "{\"status\":\"success\",\"data\":{\"added\":[{\"cidr\":\"203.0.113.0/24\"}]}}");
         });
         var body = new Acl.ModifyRequest(List.of(new CidrEntry("203.0.113.0/24")));
@@ -271,7 +273,7 @@ class TransportTest {
 
     @Test
     void queryParametersAreEncoded() {
-        routes.put("GET /v2.2/account/cdr", ex -> {
+        routes.put("GET /v2.2/account/cdr", (ex, body) -> {
             assertEquals("start=1747345200&end=1747258800", ex.getRequestURI().getQuery());
             respond(ex, 200, "{\"status\":\"success\",\"data\":{\"start\":1747345200,\"end\":1747258800,\"cdr\":[]}}");
         });
@@ -281,7 +283,7 @@ class TransportTest {
 
     @Test
     void nonJsonErrorBodyPreservedAsString() {
-        routes.put("GET /v2.2/account", ex -> respond(ex, 500, "plain text"));
+        routes.put("GET /v2.2/account", (ex, body) -> respond(ex, 500, "plain text"));
         ApiError e = assertThrows(ApiError.class, () -> client(0, "k").account().get());
         assertEquals("plain text", e.getBody());
         assertEquals(ErrorKind.SERVER, e.getKind());
