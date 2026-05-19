@@ -25,7 +25,7 @@ public final class Numbers {
 
     public record FaxRequest(String email) {}
 
-    public record ForwardRequest(Integer destination) {}
+    public record ForwardRequest(String destination) {}
 
     public record TranslationRequest(String translation) {}
 
