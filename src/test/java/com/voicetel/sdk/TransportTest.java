@@ -47,17 +47,33 @@ class TransportTest {
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getPath();
             String query = exchange.getRequestURI().getQuery();
+            // Lowercase header keys — HTTP is case-insensitive but JDK Headers
+            // returns whichever case it has internally.
             Map<String, String> headers = new HashMap<>();
-            exchange.getRequestHeaders().forEach((k, v) -> headers.put(k, String.join(",", v)));
+            exchange.getRequestHeaders().forEach((k, v) ->
+                headers.put(k.toLowerCase(), String.join(",", v)));
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             recorded.add(new RecordedRequest(exchange.getRequestMethod(), path, query, headers, body));
             Handler h = routes.get(exchange.getRequestMethod() + " " + path);
-            if (h == null) {
-                exchange.sendResponseHeaders(404, -1);
-                exchange.close();
-                return;
+            try {
+                if (h == null) {
+                    respond(exchange, 404, null);
+                    return;
+                }
+                h.serve(exchange);
+            } catch (Throwable t) {
+                // Surface handler-side failures as a 500 with the message —
+                // otherwise the client sees a bare connection drop and the
+                // test reports "header parser received no bytes" instead of
+                // the real cause.
+                try {
+                    respond(exchange, 500, "{\"error\":\"handler threw: " +
+                        (t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage()) + "\"}");
+                } catch (IOException ignore) {
+                    /* connection already half-dead */
+                }
+                throw new RuntimeException(t);
             }
-            h.serve(exchange);
         });
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
@@ -81,15 +97,22 @@ class TransportTest {
     }
 
     private static void respond(HttpExchange ex, int status, String body) throws IOException {
-        if (body == null || body.isEmpty()) {
-            ex.sendResponseHeaders(status, -1);
-        } else {
-            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-            ex.getResponseHeaders().set("Content-Type", "application/json");
-            ex.sendResponseHeaders(status, bytes.length);
-            try (OutputStream os = ex.getResponseBody()) {
-                os.write(bytes);
+        try {
+            if (body == null || body.isEmpty()) {
+                ex.sendResponseHeaders(status, -1);
+            } else {
+                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                ex.getResponseHeaders().set("Content-Type", "application/json");
+                ex.sendResponseHeaders(status, bytes.length);
+                try (OutputStream os = ex.getResponseBody()) {
+                    os.write(bytes);
+                }
             }
+        } finally {
+            // HttpExchange must be closed for the response to fully flush —
+            // try-with-resources on the body OutputStream closes it for body
+            // responses, but the empty-body branch needs an explicit close.
+            ex.close();
         }
     }
 
@@ -101,9 +124,9 @@ class TransportTest {
         assertEquals("1", me.username());
         assertEquals("Acme", me.name());
         var req = recorded.get(0);
-        assertEquals("Bearer abc123", req.headers().get("Authorization"));
-        assertTrue(req.headers().get("User-Agent").startsWith("voicetel-java/"));
-        assertEquals("application/json", req.headers().get("Accept"));
+        assertEquals("Bearer abc123", req.headers().get("authorization"));
+        assertTrue(req.headers().get("user-agent").startsWith("voicetel-java/"));
+        assertEquals("application/json", req.headers().get("accept"));
     }
 
     @Test
@@ -112,7 +135,7 @@ class TransportTest {
             "{\"status\":\"success\",\"data\":{\"message\":\"sent\"}}"));
         Account.RecoverData r = client(0, "").account().recover(new Account.RecoverRequest("x@y.com"));
         assertEquals("sent", r.message());
-        assertNull(recorded.get(0).headers().get("Authorization"));
+        assertNull(recorded.get(0).headers().get("authorization"));
     }
 
     @Test
