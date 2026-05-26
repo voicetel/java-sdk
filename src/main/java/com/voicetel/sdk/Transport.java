@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -17,6 +18,8 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.zip.GZIPInputStream;
 
 /**
  * Internal HTTP transport. Owns the {@link HttpClient}, the bearer token,
@@ -49,7 +52,10 @@ public final class Transport {
         this.userAgent = opts.userAgent;
         this.httpClient = opts.httpClient != null
             ? opts.httpClient
-            : HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+            : HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_2)
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
     }
 
     public void setBearer(String key) { this.apiKey = key; }
@@ -86,14 +92,18 @@ public final class Transport {
         }
         URI uri = URI.create(baseUrl + path + queryString(query));
         byte[] bodyBytes = serializeBody(body);
+        String idempotencyKey = ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))
+            ? UUID.randomUUID().toString() : null;
 
         Throwable lastError = null;
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             HttpRequest.Builder b = HttpRequest.newBuilder(uri)
                 .timeout(timeout)
                 .header("User-Agent", userAgent)
-                .header("Accept", "application/json");
+                .header("Accept", "application/json")
+                .header("Accept-Encoding", "gzip");
             if (requireAuth) b.header("Authorization", "Bearer " + apiKey);
+            if (idempotencyKey != null) b.header("Idempotency-Key", idempotencyKey);
             HttpRequest.BodyPublisher pub = bodyBytes != null
                 ? HttpRequest.BodyPublishers.ofByteArray(bodyBytes)
                 : HttpRequest.BodyPublishers.noBody();
@@ -110,7 +120,7 @@ public final class Transport {
 
             HttpResponse<String> resp;
             try {
-                resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                resp = httpClient.send(req, gzipAwareString());
             } catch (IOException ex) {
                 lastError = ex;
                 if (attempt >= maxRetries) {
@@ -233,6 +243,25 @@ public final class Transport {
             Thread.currentThread().interrupt();
             throw new ApiError("interrupted during retry backoff", ErrorKind.UNKNOWN, ex);
         }
+    }
+
+    private static HttpResponse.BodyHandler<String> gzipAwareString() {
+        return responseInfo -> {
+            String encoding = responseInfo.headers().firstValue("Content-Encoding").orElse("");
+            if ("gzip".equalsIgnoreCase(encoding)) {
+                return HttpResponse.BodySubscribers.mapping(
+                    HttpResponse.BodySubscribers.ofByteArray(),
+                    bytes -> {
+                        try (var gis = new GZIPInputStream(new ByteArrayInputStream(bytes))) {
+                            return new String(gis.readAllBytes(), StandardCharsets.UTF_8);
+                        } catch (IOException e) {
+                            return new String(bytes, StandardCharsets.UTF_8);
+                        }
+                    }
+                );
+            }
+            return HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8);
+        };
     }
 
     private static String truncate(String s) {
