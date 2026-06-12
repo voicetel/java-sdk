@@ -1,0 +1,62 @@
+name: Publish to Maven Central
+
+# Publishes com.voicetel:voicetel-sdk to Maven Central on every v* tag
+# push, using the new Central Portal (central-publishing-maven-plugin
+# in the pom.xml's `release` profile).
+#
+# Required one-time setup outside this workflow:
+#
+#   1. Claim the `com.voicetel` namespace at central.sonatype.com if
+#      you haven't already. Verification is via a TXT record on
+#      voicetel.com or a GitHub-org handle assertion.
+#   2. Generate a Central Portal user token (Account → User Token).
+#      Add the token name + secret to this repo's secrets as
+#      CENTRAL_USERNAME and CENTRAL_PASSWORD.
+#   3. Generate an ASCII-armored GPG key for signing release artifacts
+#      and upload its public half to a keyserver
+#      (e.g. `keys.openpgp.org`, `keyserver.ubuntu.com`). Add the
+#      private key and its passphrase to this repo's secrets as
+#      MAVEN_GPG_PRIVATE_KEY and MAVEN_GPG_PASSPHRASE.
+#
+# The `com.voicetel` namespace covers BOTH voicetel/java-sdk (this
+# repo, artifactId `voicetel-sdk`) AND voicetel/voiceml-java-sdk
+# (artifactId `voiceml`). Claim once, publish both.
+#
+# Until those secrets are set, the workflow will fail at the deploy
+# step. The build + test + javadoc + sources jar steps still run so
+# you can see what would have shipped.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to Maven Central
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK + GPG + Maven settings (central server-id)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Build + sign + deploy to Central Portal
+        run: mvn -B --no-transfer-progress -P release deploy
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
