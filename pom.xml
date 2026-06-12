@@ -122,4 +122,65 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Activated by `mvn -P release deploy` (CI release workflow). Adds the
+            two pieces required by Maven Central:
+
+              maven-gpg-plugin            — detached signatures on every artifact
+              central-publishing-maven-plugin — uploads to the new Central Portal
+                                                (replaces the deprecated OSSRH
+                                                staging flow)
+
+            Required environment for the release run:
+              CENTRAL_USERNAME            — Central Portal user token name
+              CENTRAL_PASSWORD            — Central Portal user token secret
+              MAVEN_GPG_PRIVATE_KEY       — ASCII-armored GPG private key (via
+                                            actions/setup-java's gpg-private-key)
+              MAVEN_GPG_PASSPHRASE        — passphrase for the key
+
+            The release profile is OFF by default so local `mvn install` and CI
+            test runs don't try to sign or publish.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.4</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
