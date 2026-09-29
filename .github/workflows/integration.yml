@@ -15,8 +15,5 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
-      - name: Integration tests (live, read-only)
-        env:
-          VOICETEL_USERNAME: ${{ secrets.VOICETEL_USERNAME }}
-          VOICETEL_PASSWORD: ${{ secrets.VOICETEL_PASSWORD }}
-        run: mvn -B -DskipTests=false -Dtest=IntegrationTest test
+      - name: Integration-style tests (in-process)
+        run: mvn -B -DskipTests=false test
