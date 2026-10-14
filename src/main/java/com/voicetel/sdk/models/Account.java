@@ -27,7 +27,6 @@ public final class Account {
         Boolean cnam,
         Boolean bypassMedia,
         Boolean intl,
-        Boolean rcid,
         Boolean mms,
         Boolean dialer,
         Boolean sms) {}

@@ -5,10 +5,10 @@ public final class Version {
     private Version() {}
 
     /** SDK semantic version. */
-    public static final String SDK_VERSION = "2.2.10";
+    public static final String SDK_VERSION = "2.2.14";
 
     /** VoiceTel REST API version this SDK targets. */
-    public static final String API_VERSION = "v2.2.10";
+    public static final String API_VERSION = "v2.2.14";
 
     /** Production VoiceTel API endpoint. */
     public static final String DEFAULT_BASE_URL = "https://api.voicetel.com";

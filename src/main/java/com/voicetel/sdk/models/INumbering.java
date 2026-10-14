@@ -93,8 +93,7 @@ public final class INumbering {
         String pid,
         String foc,
         String createdAt,
-        String message,
-        String supportUrl) {}
+        String message) {}
 
     public record PortDetail(
         String status,
@@ -113,6 +112,7 @@ public final class INumbering {
 
     public record OrderFailedEntry(String number, String reason) {}
 
+    /** {@code amountCharged} is the amount deducted from the account balance. */
     public record OrderCreateData(String orderId, Double amountCharged, List<String> numbersOrdered, List<OrderFailedEntry> failed) {}
 
     public record PortListData(List<PortSummary> ports) {}

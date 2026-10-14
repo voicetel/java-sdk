@@ -96,6 +96,13 @@ public final class NumbersService {
         return t.request("PATCH", "/v2.2/numbers/" + number + "/messaging", null, body, Numbers.MessagingPatchData.class, true);
     }
 
+    /**
+     * Binds a 10DLC campaign to a TN. Path-B campaigns are bound synchronously
+     * ({@code status} "enabled"); path-C campaigns are provisioned
+     * asynchronously (HTTP 202, {@code status} "pending" — poll
+     * {@link #getMessaging} until the job's state is done or failed).
+     * Idempotent: a number already bound reports {@code status} "already".
+     */
     public Numbers.MessagingCampaignAssignData assignCampaign(String number, Numbers.CampaignAssignRequest body) {
         return t.request("PUT", "/v2.2/numbers/" + number + "/messaging-campaign", null, body, Numbers.MessagingCampaignAssignData.class, true);
     }
@@ -109,6 +116,12 @@ public final class NumbersService {
             new Numbers.BulkUnassignRequest(numbers), Numbers.BulkCampaignUnassignData.class, true);
     }
 
+    /**
+     * Sets the port-out PIN a losing carrier must present to release a TN.
+     * A PIN is locked for 30 days once set, so the call is idempotent: a
+     * number that already has one returns it unchanged with
+     * {@code changed} false; a newly set PIN returns {@code changed} true.
+     */
     public Numbers.PortOutPinUpdateData setPortOutPin(String number, Numbers.PortOutPinUpdateRequest body) {
         return t.request("PATCH", "/v2.2/numbers/" + number + "/port-out-pin", null, body, Numbers.PortOutPinUpdateData.class, true);
     }

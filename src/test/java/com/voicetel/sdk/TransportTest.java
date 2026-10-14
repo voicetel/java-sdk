@@ -8,16 +8,21 @@ import com.sun.net.httpserver.HttpServer;
 import com.voicetel.sdk.models.Account;
 import com.voicetel.sdk.models.Acl;
 import com.voicetel.sdk.models.Common.CidrEntry;
+import com.voicetel.sdk.models.INumbering;
+import com.voicetel.sdk.models.Messaging;
+import com.voicetel.sdk.models.Numbers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.reflect.RecordComponent;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -296,5 +301,142 @@ class TransportTest {
         assertTrue(new ApiError("x", ErrorKind.AUTHENTICATION).isAuthentication());
         assertTrue(new ApiError("x", ErrorKind.CONFLICT).isConflict());
         assertFalse(new ApiError("x", ErrorKind.SERVER).isRateLimit());
+    }
+
+    @Test
+    void campaignStatusDecodesDca() {
+        // v2.2.14 added dca (carrier review progress); null for CAMPAIGN_INVALID_ID.
+        routes.put("GET /v2.2/messaging/campaigns", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"campaigns\":["
+                + "{\"id\":\"C1\",\"status\":\"CAMPAIGN_DCA_COMPLETE\",\"numbers\":[\"2015550123\"],"
+                + "\"dca\":{\"electionComplete\":true,\"electedCarriers\":[\"AT&T\",\"T-Mobile\"],"
+                + "\"carriers\":[{\"carrier\":\"T-Mobile\",\"status\":\"ACTIVE\","
+                + "\"detail\":\"Campaign approved\",\"updatedAt\":\"2026-10-13T09:30:00Z\"}]}},"
+                + "{\"id\":\"C2\",\"status\":\"CAMPAIGN_INVALID_ID\",\"numbers\":[],\"dca\":null}]}}"));
+        Messaging.CampaignStatusData r = client(0, "k").messaging().campaignStatus();
+        assertEquals(2, r.campaigns().size());
+
+        Messaging.CampaignStatusItem c1 = r.campaigns().get(0);
+        assertEquals("CAMPAIGN_DCA_COMPLETE", c1.status());
+        Messaging.CampaignDca dca = c1.dca();
+        assertNotNull(dca);
+        assertTrue(dca.electionComplete());
+        assertEquals(List.of("AT&T", "T-Mobile"), dca.electedCarriers());
+        assertEquals(1, dca.carriers().size());
+        assertEquals("T-Mobile", dca.carriers().get(0).carrier());
+        assertEquals("ACTIVE", dca.carriers().get(0).status());
+        assertEquals("Campaign approved", dca.carriers().get(0).detail());
+        assertEquals("2026-10-13T09:30:00Z", dca.carriers().get(0).updatedAt());
+
+        assertNull(r.campaigns().get(1).dca(), "dca is null for CAMPAIGN_INVALID_ID");
+    }
+
+    @Test
+    void assignCampaignDecodesV2211PathBFields() {
+        routes.put("PUT /v2.2/numbers/2015550123/messaging-campaign", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"campaignId\":\"C1\","
+                + "\"status\":\"enabled\",\"carrier\":19,\"network\":\"B\",\"upstreamCnpId\":\"CAMP003\","
+                + "\"previousNetwork\":null,\"previousNetworkCleared\":false,\"alreadyAssigned\":false,"
+                + "\"orderId\":\"229544057\",\"warning\":null,\"message\":null,\"job\":null}}"));
+        var r = client(0, "k").numbers()
+            .assignCampaign("2015550123", new Numbers.CampaignAssignRequest("C1"));
+        assertEquals("enabled", r.status());
+        assertEquals("B", r.network());
+        assertEquals(19, r.carrier());
+        assertFalse(r.alreadyAssigned());
+        assertEquals("229544057", r.orderId());
+        assertNull(r.job());
+    }
+
+    @Test
+    void assignCampaignPendingPathCDecodesJob() {
+        // v2.2.11: path-C campaigns enable asynchronously — PUT returns 202 with
+        // status "pending" and a job, and GET messaging reports pending while
+        // provisioning is in flight.
+        routes.put("PUT /v2.2/numbers/6185550104/messaging-campaign", (ex, body) -> respond(ex, 202,
+            "{\"status\":\"success\",\"data\":{\"number\":\"6185550104\",\"campaignId\":\"CAMP002\","
+                + "\"status\":\"pending\",\"carrier\":1,\"network\":\"C\",\"upstreamCnpId\":\"BANDW\","
+                + "\"previousNetwork\":null,\"previousNetworkCleared\":false,\"alreadyAssigned\":false,"
+                + "\"orderId\":null,\"warning\":null,"
+                + "\"message\":\"Enablement accepted; the number is being provisioned.\","
+                + "\"job\":{\"campaignId\":\"CAMP002\",\"state\":\"hosting\","
+                + "\"message\":\"Hosting order submitted\",\"createdAt\":\"2026-10-13T12:00:00Z\","
+                + "\"updatedAt\":\"2026-10-13T12:00:01Z\"}}}"));
+        routes.put("GET /v2.2/numbers/6185550104/messaging", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"6185550104\",\"enabled\":false,"
+                + "\"carrier\":16,\"routeIn\":0,\"resource\":\"x\",\"network\":\"C\",\"campaign\":null,"
+                + "\"pending\":{\"campaignId\":\"CAMP002\",\"state\":\"routing\","
+                + "\"message\":\"Routing order submitted\",\"createdAt\":\"2026-10-13T12:00:00Z\","
+                + "\"updatedAt\":\"2026-10-13T12:05:00Z\"}}}"));
+
+        var r = client(0, "k").numbers()
+            .assignCampaign("6185550104", new Numbers.CampaignAssignRequest("CAMP002"));
+        assertEquals("pending", r.status());
+        assertEquals("C", r.network());
+        assertEquals(1, r.carrier());
+        assertEquals("BANDW", r.upstreamCnpId());
+        assertNull(r.orderId(), "path-C assignments create no network order");
+        assertNotNull(r.message());
+        assertNotNull(r.job());
+        assertEquals("CAMP002", r.job().campaignId());
+        assertEquals("hosting", r.job().state());
+        assertEquals("Hosting order submitted", r.job().message());
+
+        Numbers.MessagingState ms = client(0, "k").numbers().getMessaging("6185550104");
+        assertEquals("C", ms.network());
+        assertNotNull(ms.pending());
+        assertEquals("routing", ms.pending().state());
+        assertEquals("Routing order submitted", ms.pending().message());
+    }
+
+    @Test
+    void portOutPinDecodesChanged() {
+        // v2.2.11 added changed (PIN idempotency): true when this call set the
+        // PIN, false when a 30-day-locked PIN already existed.
+        routes.put("PATCH /v2.2/numbers/2015550123/port-out-pin", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"portOutPin\":\"1234\",\"changed\":true}}"));
+        routes.put("PATCH /v2.2/numbers/2015550177/port-out-pin", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550177\",\"portOutPin\":\"4287\",\"changed\":false}}"));
+
+        assertTrue(client(0, "k").numbers()
+            .setPortOutPin("2015550123", new Numbers.PortOutPinUpdateRequest("1234")).changed());
+        Numbers.PortOutPinUpdateData again = client(0, "k").numbers()
+            .setPortOutPin("2015550177", new Numbers.PortOutPinUpdateRequest("4287"));
+        assertFalse(again.changed());
+        assertEquals("4287", again.portOutPin());
+    }
+
+    @Test
+    void accountServicesNoLongerCarryRcid() {
+        // v2.2.11 removed services.rcid — the model must not carry it, and
+        // current payloads (without the field) decode normally.
+        assertTrue(Arrays.stream(Account.Services.class.getRecordComponents())
+            .map(RecordComponent::getName)
+            .noneMatch("rcid"::equals),
+            "services.rcid was removed in v2.2.11");
+
+        routes.put("GET /v2.2/account", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"username\":\"1\","
+                + "\"services\":{\"e911\":true,\"cnam\":true,\"bypassMedia\":false,\"intl\":false,"
+                + "\"mms\":true,\"dialer\":false,\"sms\":true}}}"));
+        Account.Data me = client(0, "k").account().get();
+        assertNotNull(me.services());
+        assertTrue(me.services().sms());
+    }
+
+    @Test
+    void portSummaryNoLongerCarriesSupportUrl() {
+        // v2.2.11 removed supportUrl from port summaries — the model must not
+        // carry it, and current payloads (without the field) decode normally.
+        assertTrue(Arrays.stream(INumbering.PortSummary.class.getRecordComponents())
+            .map(RecordComponent::getName)
+            .noneMatch("supportUrl"::equals),
+            "portSummary.supportUrl was removed in v2.2.11");
+
+        routes.put("GET /v2.2/ports", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"ports\":[{\"id\":\"abc\",\"status\":\"Complete\"}]}}"));
+        INumbering.PortListData r = client(0, "k").iNumbering().ports();
+        assertEquals("abc", r.ports().get(0).id());
+        assertEquals("Complete", r.ports().get(0).status());
     }
 }

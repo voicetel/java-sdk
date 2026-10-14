@@ -10,11 +10,11 @@ import java.util.List;
 public final class Authentication {
     private Authentication() {}
 
-    /** 0=Digest, 1=IP Auth, 2=Digest OR IP, 3=Digest AND IP. */
+    /** 0=Digest, 1=Lax (Digest | IP), 2=IP, 3=Strict (Digest + IP). */
     public static final int TYPE_DIGEST = 0;
-    public static final int TYPE_IP_AUTH = 1;
-    public static final int TYPE_DIGEST_OR_IP = 2;
-    public static final int TYPE_DIGEST_AND_IP = 3;
+    public static final int TYPE_LAX = 1;
+    public static final int TYPE_IP = 2;
+    public static final int TYPE_STRICT = 3;
 
     public record PutRequest(Integer authType, String password) {}
 
