@@ -332,6 +332,45 @@ class TransportTest {
     }
 
     @Test
+    void messagingHealthSurfaceReturnsRawMaps() {
+        // v2.2.15: messaging-health endpoints have no response schema in the spec, so the
+        // SDK returns the decoded JSON object as a raw Map<String, Object>.
+        routes.put("GET /v2.2/messaging/health", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"summary\":{\"numbers\":3,\"healthy\":2}}}"));
+        routes.put("GET /v2.2/messaging/health/alerts", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"enabled\":true}}"));
+        routes.put("PUT /v2.2/messaging/health/alerts", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"enabled\":false}}"));
+        routes.put("POST /v2.2/messaging/health/check", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2125550123\",\"inService\":true}}"));
+        routes.put("GET /v2.2/messaging/health/samples", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"samples\":[]}}"));
+
+        var messaging = client(0, "k").messaging();
+
+        Map<String, Object> health = messaging.health();
+        assertNotNull(health.get("summary"));
+        assertEquals(Boolean.TRUE, messaging.healthAlerts().get("enabled"));
+        assertEquals(Boolean.FALSE, messaging.setHealthAlerts(false).get("enabled"));
+        assertEquals(Boolean.TRUE, messaging.healthCheck("2125550123").get("inService"));
+        assertNotNull(messaging.healthSamples("2125550123").get("samples"));
+
+        // Wire shape: request bodies and the samples query param.
+        RecordedRequest put = recorded.stream()
+            .filter(r -> r.method().equals("PUT") && r.path().equals("/v2.2/messaging/health/alerts"))
+            .findFirst().orElseThrow();
+        assertEquals("{\"enabled\":false}", put.body());
+        RecordedRequest post = recorded.stream()
+            .filter(r -> r.method().equals("POST") && r.path().equals("/v2.2/messaging/health/check"))
+            .findFirst().orElseThrow();
+        assertEquals("{\"number\":\"2125550123\"}", post.body());
+        RecordedRequest samples = recorded.stream()
+            .filter(r -> r.method().equals("GET") && r.path().equals("/v2.2/messaging/health/samples"))
+            .findFirst().orElseThrow();
+        assertEquals("number=2125550123", samples.query());
+    }
+
+    @Test
     void assignCampaignDecodesV2211PathBFields() {
         routes.put("PUT /v2.2/numbers/2015550123/messaging-campaign", (ex, body) -> respond(ex, 200,
             "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"campaignId\":\"C1\","

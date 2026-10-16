@@ -2,7 +2,7 @@
 
 The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/api/v2.2/) — provision numbers, place orders, validate e911, send messages, and manage your account, with strongly-typed records and modern `java.net.http`.
 
-![Version](https://img.shields.io/badge/version-2.2.14-blue)
+![Version](https://img.shields.io/badge/version-2.2.15-blue)
 ![Java](https://img.shields.io/badge/java-17%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Build](https://github.com/voicetel/java-sdk/actions/workflows/ci.yml/badge.svg)
@@ -45,7 +45,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 - **Account** — profile, sub-accounts, CDRs, credits, payments, MRC, registration, password recovery.
 - **e911** — record provisioning, address validation, lookup, removal.
 - **Gateways** — list, create, update, delete, view bound numbers.
-- **Messaging** — SMS & MMS sending, message history, 10DLC brand and campaign registration, per-number messaging state.
+- **Messaging** — SMS & MMS sending, message history, 10DLC brand and campaign registration, per-number messaging state, and messaging health (account overview, per-number live check, spam-blocked samples, alert-email setting).
 - **Lookups** — CNAM and LRN dips.
 - **iNumbering** — inventory search, coverage queries, number orders, port-in submissions, port-out availability checks.
 - **Support** — ticket create / read / update / delete, threaded messages, replies.
@@ -65,7 +65,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 <dependency>
   <groupId>com.voicetel</groupId>
   <artifactId>voicetel-sdk</artifactId>
-  <version>2.2.14</version>
+  <version>2.2.15</version>
 </dependency>
 ```
 
@@ -73,7 +73,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 
 ```kotlin
 dependencies {
-    implementation("com.voicetel:voicetel-sdk:2.2.14")
+    implementation("com.voicetel:voicetel-sdk:2.2.15")
 }
 ```
 
@@ -183,8 +183,8 @@ For 409 conflicts on ACL or auth, the structured failure payload is on `e.getBod
 
 These endpoints are limited to **6 requests per hour per IP**:
 
-- `account/info`
-- `account/mrc` (`client.account().recurringCharges()`)
+- `account`
+- `account/recurring-charges` (`client.account().recurringCharges()`)
 - `account/cdr` (`client.account().cdr(...)`)
 - `account/api-key` (`client.login(...)`)
 
