@@ -42,6 +42,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Pin Maven 3.9.x
+        # ubuntu-latest ships Maven 3.10, which writes maven-metadata-local.xml
+        # into the staging area; central-publishing 0.11.0 only removes the
+        # -central-staging variant, so the Portal rejects the bundle
+        # ("content that does NOT have a .pom file"). Plugin issue #79.
+        uses: stCarolas/setup-maven@v5
+        with:
+          maven-version: 3.9.11
+
       - name: Set up JDK + GPG + Maven settings (central server-id)
         uses: actions/setup-java@v6
         with:
