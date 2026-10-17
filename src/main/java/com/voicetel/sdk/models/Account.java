@@ -71,11 +71,14 @@ public final class Account {
 
     public record MrcData(List<MrcCharge> charges, Double total) {}
 
-    public record RegistrationData(String agent, String uri, Integer expires) {}
+    public record RegistrationData(String agent, String uri) {}
 
-    /** POST /v2.2/account — admin-only sub-account creation. */
-    public record AddRequest(Integer username, String name, String email, Integer masterAccount) {
-        public AddRequest(int username, String name, String email) {
+    /**
+     * POST /v2.2/account — admin-only sub-account creation. Usernames are
+     * strings (10-digit numeric, but they do not fit in an {@code int}).
+     */
+    public record AddRequest(String username, String name, String email, String masterAccount) {
+        public AddRequest(String username, String name, String email) {
             this(username, name, email, null);
         }
     }

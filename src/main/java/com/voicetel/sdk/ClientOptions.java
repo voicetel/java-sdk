@@ -48,7 +48,7 @@ public final class ClientOptions {
         private HttpClient httpClient = null;
         private String userAgent = Version.DEFAULT_USER_AGENT;
 
-        /** Existing bearer token. Omit and call {@link VoiceTelClient#login(int, String)}. */
+        /** Existing bearer token. Omit and call {@link VoiceTelClient#login(String, String)}. */
         public Builder apiKey(String key) {
             this.apiKey = key != null ? key : "";
             return this;

@@ -1,6 +1,7 @@
 package com.voicetel.sdk;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -35,7 +36,9 @@ public final class Transport {
     static final ObjectMapper MAPPER = new ObjectMapper()
         .registerModule(new JavaTimeModule())
         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-        .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
+        .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
+        // Server-side field additions must never break clients.
+        .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     private volatile String apiKey;
     private final String baseUrl;
@@ -171,20 +174,22 @@ public final class Transport {
             }
         }
 
-        // Error path.
+        // Error path. The spec envelope is
+        // {"status":"error","error":{"code":<int>,"message":<string>}}.
         Object body = text;
-        String code = null;
+        Long code = null;
         String message = "HTTP " + status;
         try {
             JsonNode root = MAPPER.readTree(text);
             body = MAPPER.treeToValue(root, Object.class);
             if (root.isObject()) {
-                JsonNode c = root.get("code");
-                if (c == null) c = root.get("error");
-                if (c != null && c.isTextual()) code = c.asText();
-                JsonNode m = root.get("message");
-                if (m == null) m = root.get("error");
-                if (m != null && m.isTextual()) message = m.asText();
+                JsonNode err = root.get("error");
+                if (err != null && err.isObject()) {
+                    JsonNode c = err.get("code");
+                    if (c != null && c.isNumber()) code = c.asLong();
+                    JsonNode m = err.get("message");
+                    if (m != null && m.isTextual()) message = m.asText();
+                }
             }
         } catch (JsonProcessingException ignored) {
             // body stays as raw text.
@@ -220,13 +225,27 @@ public final class Transport {
     static Map<String, Object> q() { return new LinkedHashMap<>(); }
     static Map<String, Object> q(Map<String, Object> m) { return m; }
 
+    /**
+     * Percent-encode a single URL path segment. {@link URLEncoder} is
+     * form-oriented, so fix up the differences for path use: space becomes
+     * {@code %20} (not {@code +}) and {@code ~} stays unencoded (RFC 3986
+     * unreserved). {@code /} is always encoded so a value can never escape
+     * its segment.
+     */
+    public static String encodePathSegment(String s) {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8)
+            .replace("+", "%20")
+            .replace("%7E", "~");
+    }
+
     private static long backoffMillis(int attempt, HttpResponse<?> resp) {
         if (resp != null) {
             var headerVal = resp.headers().firstValue("Retry-After");
             if (headerVal.isPresent()) {
                 try {
                     long secs = Long.parseLong(headerVal.get().trim());
-                    if (secs >= 0) return secs * 1000L;
+                    // Honor Retry-After but never sleep longer than the 8s cap.
+                    if (secs >= 0) return Math.min(secs * 1000L, 8_000L);
                 } catch (NumberFormatException ignored) { /* fall through */ }
             }
         }

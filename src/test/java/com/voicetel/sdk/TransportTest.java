@@ -169,13 +169,26 @@ class TransportTest {
             recorded.clear();
             routes.clear();
             routes.put("GET /v2.2/account", (ex, body) -> respond(ex, status,
-                "{\"code\":\"X\",\"message\":\"boom\"}"));
+                "{\"status\":\"error\",\"error\":{\"code\":" + status + ",\"message\":\"boom\"}}"));
             ApiError e = assertThrows(ApiError.class, () -> client(0, "k").account().get());
             assertEquals(expected, e.getKind(), "status " + status);
             assertEquals(status, e.getStatusCode());
-            assertEquals("X", e.getCode());
+            assertEquals((long) status, e.getCode());
             assertTrue(e.getMessage().contains("boom"));
         }
+    }
+
+    @Test
+    void specErrorEnvelopeParsesNestedCodeAndMessage() {
+        // Canonical errorResponse shape from the spec:
+        // {"status":"error","error":{"code":<int>,"message":<string>}}
+        routes.put("GET /v2.2/account", (ex, body) -> respond(ex, 400,
+            "{\"status\":\"error\",\"error\":{\"code\":400,\"message\":\"Field Required: number\"}}"));
+        ApiError e = assertThrows(ApiError.class, () -> client(0, "k").account().get());
+        assertEquals(ErrorKind.BAD_REQUEST, e.getKind());
+        assertEquals(400, e.getStatusCode());
+        assertEquals(400L, e.getCode());
+        assertEquals("Field Required: number", e.getMessage());
     }
 
     @Test
@@ -228,8 +241,8 @@ class TransportTest {
         AtomicInteger logins = new AtomicInteger();
         routes.put("POST /v2.2/account/api-key", (ex, body) -> {
             logins.incrementAndGet();
-            assertTrue(body.contains("\"username\":1000000001"),
-                "body should include numeric username, was: " + body);
+            assertTrue(body.contains("\"username\":\"1000000001\""),
+                "body should include string username, was: " + body);
             assertNull(ex.getRequestHeaders().getFirst("Authorization"));
             respond(ex, 200, "{\"status\":\"success\",\"data\":{\"apikey\":\"32hex\"}}");
         });
@@ -239,7 +252,7 @@ class TransportTest {
         });
 
         VoiceTelClient c = client(0, "");
-        String key = c.login(1000000001, "pw");
+        String key = c.login("1000000001", "pw");
         assertEquals("32hex", key);
         assertEquals("32hex", c.apiKey());
         Account.Data me = c.account().get();
@@ -251,7 +264,7 @@ class TransportTest {
     void loginRejectsResponseMissingApiKey() {
         routes.put("POST /v2.2/account/api-key", (ex, body) -> respond(ex, 200,
             "{\"status\":\"success\",\"data\":{}}"));
-        ApiError e = assertThrows(ApiError.class, () -> client(0, "").login(1, "p"));
+        ApiError e = assertThrows(ApiError.class, () -> client(0, "").login("1", "p"));
         assertEquals(ErrorKind.AUTHENTICATION, e.getKind());
     }
 
@@ -306,14 +319,18 @@ class TransportTest {
     @Test
     void campaignStatusDecodesDca() {
         // v2.2.14 added dca (carrier review progress); null for CAMPAIGN_INVALID_ID.
-        routes.put("GET /v2.2/messaging/campaigns", (ex, body) -> respond(ex, 200,
-            "{\"status\":\"success\",\"data\":{\"campaigns\":["
-                + "{\"id\":\"C1\",\"status\":\"CAMPAIGN_DCA_COMPLETE\",\"numbers\":[\"2015550123\"],"
-                + "\"dca\":{\"electionComplete\":true,\"electedCarriers\":[\"AT&T\",\"T-Mobile\"],"
-                + "\"carriers\":[{\"carrier\":\"T-Mobile\",\"status\":\"ACTIVE\","
-                + "\"detail\":\"Campaign approved\",\"updatedAt\":\"2026-10-13T09:30:00Z\"}]}},"
-                + "{\"id\":\"C2\",\"status\":\"CAMPAIGN_INVALID_ID\",\"numbers\":[],\"dca\":null}]}}"));
-        Messaging.CampaignStatusData r = client(0, "k").messaging().campaignStatus();
+        // ids is a required query param (comma-separated campaign ids).
+        routes.put("GET /v2.2/messaging/campaigns", (ex, body) -> {
+            assertEquals("ids=C1%2CC2", ex.getRequestURI().getRawQuery());
+            respond(ex, 200,
+                "{\"status\":\"success\",\"data\":{\"campaigns\":["
+                    + "{\"id\":\"C1\",\"status\":\"CAMPAIGN_DCA_COMPLETE\",\"numbers\":[\"2015550123\"],"
+                    + "\"dca\":{\"electionComplete\":true,\"electedCarriers\":[\"AT&T\",\"T-Mobile\"],"
+                    + "\"carriers\":[{\"carrier\":\"T-Mobile\",\"status\":\"ACTIVE\","
+                    + "\"detail\":\"Campaign approved\",\"updatedAt\":\"2026-10-13T09:30:00Z\"}]}},"
+                    + "{\"id\":\"C2\",\"status\":\"CAMPAIGN_INVALID_ID\",\"numbers\":[],\"dca\":null}]}}");
+        });
+        Messaging.CampaignStatusData r = client(0, "k").messaging().campaignStatus("C1,C2");
         assertEquals(2, r.campaigns().size());
 
         Messaging.CampaignStatusItem c1 = r.campaigns().get(0);
@@ -477,5 +494,21 @@ class TransportTest {
         INumbering.PortListData r = client(0, "k").iNumbering().ports();
         assertEquals("abc", r.ports().get(0).id());
         assertEquals("Complete", r.ports().get(0).status());
+    }
+
+    @Test
+    void unknownServerFieldsNeverBreakDecoding() {
+        // Server-side field additions must never break clients: extra keys at
+        // the envelope, data, and nested-record level are all ignored.
+        routes.put("GET /v2.2/account", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"brandNewTopLevel\":true,"
+                + "\"data\":{\"username\":\"1\",\"name\":\"Acme\",\"futureField\":{\"x\":1},"
+                + "\"services\":{\"e911\":true,\"sms\":true,\"someNewService\":false},"
+                + "\"rates\":{\"sms\":0.01,\"newRate\":9.99}}}"));
+        Account.Data me = assertDoesNotThrow(() -> client(0, "k").account().get());
+        assertEquals("Acme", me.name());
+        assertNotNull(me.services());
+        assertTrue(me.services().sms());
+        assertNotNull(me.rates());
     }
 }

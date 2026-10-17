@@ -116,7 +116,7 @@ public final class Support {
 
     public record TicketData(Conversation ticket) {}
 
-    public record ListData(List<Conversation> tickets) {}
+    public record ListData(Integer totalCount, List<Conversation> tickets) {}
 
     public record ThreadsData(List<Thread> messages) {}
 

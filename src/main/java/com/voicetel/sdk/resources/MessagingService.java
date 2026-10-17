@@ -14,29 +14,33 @@ public final class MessagingService {
 
     public MessagingService(Transport t) { this.t = t; }
 
-    /** Filters for {@link #history}. Build via the static factories. */
+    /**
+     * Filters for {@link #history}. {@code number} (ten-digit TN on the
+     * account) is required; {@code from}/{@code to} are Unix timestamps
+     * (defaults: now / 24h ago); {@code type} is {@code "sms"} (default),
+     * {@code "mms"}, or {@code "dlr"}.
+     */
     public static final class HistoryOptions {
         public final String number;
-        public final Integer start;
-        public final Integer end;
+        public final Integer from;
+        public final Integer to;
         public final String type;
 
-        public HistoryOptions(String number, Integer start, Integer end, String type) {
+        public HistoryOptions(String number, Integer from, Integer to, String type) {
             this.number = number;
-            this.start = start;
-            this.end = end;
+            this.from = from;
+            this.to = to;
             this.type = type;
         }
 
-        public static HistoryOptions empty() { return new HistoryOptions(null, null, null, null); }
         public static HistoryOptions forNumber(String n) { return new HistoryOptions(n, null, null, null); }
     }
 
     public Messaging.HistoryData history(HistoryOptions opts) {
         Map<String, Object> q = new LinkedHashMap<>();
-        if (opts.number != null) q.put("number", opts.number);
-        if (opts.start != null) q.put("start", opts.start);
-        if (opts.end != null) q.put("end", opts.end);
+        q.put("number", opts.number);
+        if (opts.from != null) q.put("from", opts.from);
+        if (opts.to != null) q.put("to", opts.to);
         if (opts.type != null) q.put("type", opts.type);
         return t.request("GET", "/v2.2/messages", q, Messaging.HistoryData.class, true);
     }
@@ -49,18 +53,21 @@ public final class MessagingService {
         return t.request("POST", "/v2.2/messaging/brands", null, body, Messaging.BrandCreateData.class, true);
     }
 
-    public Messaging.CampaignStatusData campaignStatus() {
-        return t.request("GET", "/v2.2/messaging/campaigns", null, Messaging.CampaignStatusData.class, true);
+    /** {@code ids} is a comma-separated list of campaign ids (max 100). */
+    public Messaging.CampaignStatusData campaignStatus(String ids) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        q.put("ids", ids);
+        return t.request("GET", "/v2.2/messaging/campaigns", q, Messaging.CampaignStatusData.class, true);
     }
 
     public Messaging.CampaignCreateData createCampaign(Messaging.CampaignCreateRequest body) {
         return t.request("POST", "/v2.2/messaging/campaigns", null, body, Messaging.CampaignCreateData.class, true);
     }
 
-    /** Messaging state for many numbers at once. Pass {@code null} for "all numbers". */
+    /** Messaging state for many numbers at once (max 1000). */
     public Numbers.MessagingListData numbersState(List<String> numbers) {
         Map<String, Object> q = new LinkedHashMap<>();
-        if (numbers != null && !numbers.isEmpty()) q.put("numbers", String.join(",", numbers));
+        q.put("numbers", String.join(",", numbers));
         return t.request("GET", "/v2.2/numbers/messaging", q, Numbers.MessagingListData.class, true);
     }
 

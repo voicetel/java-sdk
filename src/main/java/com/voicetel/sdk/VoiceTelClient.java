@@ -18,11 +18,11 @@ import java.util.Map;
  * Entry point for the VoiceTel API. Thread-safe; one instance per app is fine.
  *
  * <p>Construct with {@code new VoiceTelClient(ClientOptions.builder().apiKey("...").build())},
- * or call {@link #login(int, String)} to exchange username + password for a bearer token.
+ * or call {@link #login(String, String)} to exchange username + password for a bearer token.
  *
  * <pre>{@code
  * VoiceTelClient client = new VoiceTelClient();
- * client.login(1000000001, "hunter2");
+ * client.login("1000000001", "hunter2");
  * Account.Data me = client.account().get();
  * }</pre>
  */
@@ -79,12 +79,13 @@ public final class VoiceTelClient {
     /**
      * Exchange username + password for a 32-hex API key and install it on this client.
      *
-     * <p>This call counts against the 6 req/hour/IP rate limit shared by every
-     * {@code account/*} endpoint (cdr, mrc, payments, registration, api-key).
+     * <p>This call counts against the 6 req/hour/IP rate limit shared with
+     * {@code GET /v2.2/account}, {@code GET /v2.2/account/cdr} and
+     * {@code GET /v2.2/account/recurring-charges}.
      *
      * @return the new API key
      */
-    public String login(int username, String password) {
+    public String login(String username, String password) {
         var body = Map.of("username", username, "password", password);
         Account.ApiKeyData data = transport.request(
             "POST", "/v2.2/account/api-key", null, body, Account.ApiKeyData.class, false);

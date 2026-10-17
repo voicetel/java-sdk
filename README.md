@@ -2,7 +2,7 @@
 
 The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/api/v2.2/) — provision numbers, place orders, validate e911, send messages, and manage your account, with strongly-typed records and modern `java.net.http`.
 
-![Version](https://img.shields.io/badge/version-2.2.15-blue)
+![Version](https://img.shields.io/badge/version-2.2.16-blue)
 ![Java](https://img.shields.io/badge/java-17%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Build](https://github.com/voicetel/java-sdk/actions/workflows/ci.yml/badge.svg)
@@ -25,7 +25,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 ## ✨ Features
 
 ### 🛡️ Strongly Typed End-to-End
-- **Java 17 records** for every one of the 73 API operations — request bodies, response payloads, and entity types.
+- **Java 17 records** for every one of the 79 API operations — request bodies, response payloads, and entity types.
 - **Jackson-databind** serialization with `@JsonIgnoreProperties(ignoreUnknown = true)` so server-side field additions never break clients.
 - **No generated code, no annotation processors.** Hand-written, navigable in any IDE.
 
@@ -65,7 +65,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 <dependency>
   <groupId>com.voicetel</groupId>
   <artifactId>voicetel-sdk</artifactId>
-  <version>2.2.15</version>
+  <version>2.2.16</version>
 </dependency>
 ```
 
@@ -73,7 +73,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 
 ```kotlin
 dependencies {
-    implementation("com.voicetel:voicetel-sdk:2.2.15")
+    implementation("com.voicetel:voicetel-sdk:2.2.16")
 }
 ```
 
@@ -90,7 +90,7 @@ public class Example {
         VoiceTelClient client = new VoiceTelClient();
 
         // Exchange username + password for an API key (one-time per session)
-        client.login(1000000001, "hunter2");
+        client.login("1000000001", "hunter2");
 
         // Typed responses — your IDE knows the shape of `me`.
         Account.Data me = client.account().get();
@@ -114,7 +114,7 @@ VoiceTelClient client = new VoiceTelClient(
     ClientOptions.builder().apiKey("32hex...").build());
 
 var coverage = client.iNumbering().coverage(
-    new INumberingService.CoverageQuery().state("NJ"));
+    new INumberingService.CoverageQuery(INumberingService.CountBy.NPANXX).locState("NJ"));
 coverage.coverage().forEach(b ->
     System.out.printf("%s-%s: %d TNs available%n", b.npa(), b.nxx(), b.count()));
 ```
@@ -129,7 +129,7 @@ Re-fetch the API key after any password change — the old one is invalidated.
 
 ```java
 VoiceTelClient client = new VoiceTelClient();
-String key = client.login(1000000001, "hunter2");
+String key = client.login("1000000001", "hunter2");
 // `key` is the new 32-hex bearer; the client already has it installed.
 ```
 
@@ -142,7 +142,7 @@ String key = client.login(1000000001, "hunter2");
 | Authentication | `client.authentication()` | `client.authentication().update(new Authentication.PutRequest(1, null))` |
 | e911 | `client.e911()` | `client.e911().validate(new E911.AddressRequest(...))` |
 | Gateways | `client.gateways()` | `client.gateways().list()` |
-| iNumbering | `client.iNumbering()` | `client.iNumbering().searchInventory(new InventoryQuery().npa(201))` |
+| iNumbering | `client.iNumbering()` | `client.iNumbering().searchInventory(new InventoryQuery("201555*"))` |
 | Lookups | `client.lookups()` | `client.lookups().lrn("2015550123", "2015550100")` |
 | Messaging | `client.messaging()` | `client.messaging().send(new Messaging.SendRequest(from, to, text))` |
 | Numbers | `client.numbers()` | `client.numbers().assignCampaign("2015550123", new Numbers.CampaignAssignRequest("C1"))` |
@@ -187,6 +187,9 @@ These endpoints are limited to **6 requests per hour per IP**:
 - `account/recurring-charges` (`client.account().recurringCharges()`)
 - `account/cdr` (`client.account().cdr(...)`)
 - `account/api-key` (`client.login(...)`)
+
+`POST /v2.2/messaging/health/check` (`client.messaging().healthCheck(number)`) is
+limited to **30 checks per hour per account**.
 
 The SDK automatically retries 429 responses with `Retry-After` honored, up to `maxRetries` (default 2). To bump it:
 

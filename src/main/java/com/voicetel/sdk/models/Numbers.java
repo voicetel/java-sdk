@@ -44,8 +44,6 @@ public final class Numbers {
 
     public record PortOutPinUpdateRequest(String pin) {}
 
-    public record BulkUnassignRequest(List<String> numbers) {}
-
     // ------------------------------------------------ entities & responses ---
 
     public record Detail(

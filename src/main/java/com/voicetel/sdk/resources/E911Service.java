@@ -3,6 +3,8 @@ package com.voicetel.sdk.resources;
 import com.voicetel.sdk.Transport;
 import com.voicetel.sdk.models.E911;
 
+import static com.voicetel.sdk.Transport.encodePathSegment;
+
 /**
  * e911 records and address validation.
  *
@@ -26,15 +28,15 @@ public final class E911Service {
     }
 
     public E911.RecordData get(String dn) {
-        return t.request("GET", "/v2.2/e911/" + dn, null, E911.RecordData.class, true);
+        return t.request("GET", "/v2.2/e911/" + encodePathSegment(dn), null, E911.RecordData.class, true);
     }
 
     public E911.RecordData provision(String dn, E911.ProvisionByIdRequest body) {
-        return t.request("PUT", "/v2.2/e911/" + dn, null, body, E911.RecordData.class, true);
+        return t.request("PUT", "/v2.2/e911/" + encodePathSegment(dn), null, body, E911.RecordData.class, true);
     }
 
     /** Returns nothing on 204 No Content. */
     public void remove(String dn) {
-        t.requestNoBody("DELETE", "/v2.2/e911/" + dn, null, true);
+        t.requestNoBody("DELETE", "/v2.2/e911/" + encodePathSegment(dn), null, true);
     }
 }

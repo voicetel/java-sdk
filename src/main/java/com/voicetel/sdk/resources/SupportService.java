@@ -3,6 +3,8 @@ package com.voicetel.sdk.resources;
 import com.voicetel.sdk.Transport;
 import com.voicetel.sdk.models.Support;
 
+import static com.voicetel.sdk.Transport.encodePathSegment;
+
 /** Support tickets — create, read, update, delete, reply. */
 public final class SupportService {
     private final Transport t;
@@ -18,23 +20,23 @@ public final class SupportService {
     }
 
     public Support.TicketData get(int id) {
-        return t.request("GET", "/v2.2/support/tickets/" + id, null, Support.TicketData.class, true);
+        return t.request("GET", "/v2.2/support/tickets/" + encodePathSegment(String.valueOf(id)), null, Support.TicketData.class, true);
     }
 
     public Support.UpdateData update(int id, Support.UpdateRequest body) {
-        return t.request("PUT", "/v2.2/support/tickets/" + id, null, body, Support.UpdateData.class, true);
+        return t.request("PUT", "/v2.2/support/tickets/" + encodePathSegment(String.valueOf(id)), null, body, Support.UpdateData.class, true);
     }
 
     /** Admin only. Returns nothing on 204 No Content. */
     public void delete(int id) {
-        t.requestNoBody("DELETE", "/v2.2/support/tickets/" + id, null, true);
+        t.requestNoBody("DELETE", "/v2.2/support/tickets/" + encodePathSegment(String.valueOf(id)), null, true);
     }
 
     public Support.ThreadsData messages(int id) {
-        return t.request("GET", "/v2.2/support/tickets/" + id + "/messages", null, Support.ThreadsData.class, true);
+        return t.request("GET", "/v2.2/support/tickets/" + encodePathSegment(String.valueOf(id)) + "/messages", null, Support.ThreadsData.class, true);
     }
 
     public Support.ReplyData reply(int id, Support.ReplyRequest body) {
-        return t.request("POST", "/v2.2/support/tickets/" + id + "/replies", null, body, Support.ReplyData.class, true);
+        return t.request("POST", "/v2.2/support/tickets/" + encodePathSegment(String.valueOf(id)) + "/replies", null, body, Support.ReplyData.class, true);
     }
 }

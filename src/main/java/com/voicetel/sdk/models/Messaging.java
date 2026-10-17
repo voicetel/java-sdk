@@ -51,7 +51,7 @@ public final class Messaging {
         String destinationNumber,
         String direction,
         String rate,
-        Integer number,
+        String number,
         String message) {}
 
     public record Record(String id, List<Object> key, RecordValue value) {}

@@ -9,15 +9,16 @@ import java.util.Map;
 /**
  * Operations under the {@code Account} tag.
  *
- * <p>Note: {@code cdr}, {@code recurringCharges}, {@code payments},
- * {@code registration} and {@code client.login()} share a 6 req/hour/IP rate
- * limit. Bursting will trigger 429s.
+ * <p>Note: {@code get}, {@code cdr}, {@code recurringCharges} and
+ * {@code client.login()} share a 6 req/hour/IP rate limit. Bursting will
+ * trigger 429s.
  */
 public final class AccountService {
     private final Transport t;
 
     public AccountService(Transport t) { this.t = t; }
 
+    /** Rate-limited (6/hr/IP). */
     public Account.Data get() {
         return t.request("GET", "/v2.2/account", null, Account.Data.class, true);
     }
@@ -30,9 +31,9 @@ public final class AccountService {
         return t.request("POST", "/v2.2/account", null, body, Account.AddData.class, true);
     }
 
-    /** Public sign-up flow. */
+    /** Public sign-up flow — no auth required. */
     public Account.SignupData signup(Account.SignupRequest body) {
-        return t.request("POST", "/v2.2/accounts", null, body, Account.SignupData.class, true);
+        return t.request("POST", "/v2.2/accounts", null, body, Account.SignupData.class, false);
     }
 
     /** Rate-limited (6/hr/IP). */
@@ -44,7 +45,17 @@ public final class AccountService {
     }
 
     public Account.CreditsData credits() {
-        return t.request("GET", "/v2.2/account/credits", null, Account.CreditsData.class, true);
+        return credits(null);
+    }
+
+    /**
+     * Credit history, optionally filtered by invoice state —
+     * {@code status} is {@code "paid"} or {@code "unpaid"}, null for both.
+     */
+    public Account.CreditsData credits(String status) {
+        Map<String, Object> q = new LinkedHashMap<>();
+        if (status != null) q.put("status", status);
+        return t.request("GET", "/v2.2/account/credits", q, Account.CreditsData.class, true);
     }
 
     /** Rate-limited (6/hr/IP). */
@@ -52,12 +63,10 @@ public final class AccountService {
         return t.request("GET", "/v2.2/account/recurring-charges", null, Account.MrcData.class, true);
     }
 
-    /** Rate-limited (6/hr/IP). */
     public Account.PaymentsData payments() {
         return t.request("GET", "/v2.2/account/payments", null, Account.PaymentsData.class, true);
     }
 
-    /** Rate-limited (6/hr/IP). */
     public Account.RegistrationData registration() {
         return t.request("GET", "/v2.2/account/registration", null, Account.RegistrationData.class, true);
     }
