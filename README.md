@@ -2,7 +2,7 @@
 
 The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/api/v2.2/) — provision numbers, place orders, validate e911, send messages, and manage your account, with strongly-typed records and modern `java.net.http`.
 
-![Version](https://img.shields.io/badge/version-2.2.16-blue)
+![Version](https://img.shields.io/badge/version-2.2.17-blue)
 ![Java](https://img.shields.io/badge/java-17%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Build](https://github.com/voicetel/java-sdk/actions/workflows/ci.yml/badge.svg)
@@ -65,7 +65,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 <dependency>
   <groupId>com.voicetel</groupId>
   <artifactId>voicetel-sdk</artifactId>
-  <version>2.2.16</version>
+  <version>2.2.17</version>
 </dependency>
 ```
 
@@ -73,7 +73,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 
 ```kotlin
 dependencies {
-    implementation("com.voicetel:voicetel-sdk:2.2.16")
+    implementation("com.voicetel:voicetel-sdk:2.2.17")
 }
 ```
 

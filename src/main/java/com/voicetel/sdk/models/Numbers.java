@@ -11,10 +11,18 @@ public final class Numbers {
 
     // ---------------------------------------------------------- requests ---
 
+    /**
+     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record AddRequest(String number, Integer route) {
         public AddRequest(String number) { this(number, null); }
     }
 
+    /**
+     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record RouteRequest(Integer route) {}
 
     public record CnamRequest(Boolean enabled) {}
@@ -40,12 +48,20 @@ public final class Numbers {
 
     public record CampaignAssignRequest(String campaignId) {}
 
+    /**
+     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record MoveRequest(Integer accountId, Integer route) {}
 
     public record PortOutPinUpdateRequest(String pin) {}
 
     // ------------------------------------------------ entities & responses ---
 
+    /**
+     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record Detail(
         String number,
         String translated,
@@ -91,6 +107,10 @@ public final class Numbers {
         CampaignBinding campaign,
         MessagingEnablementJob pending) {}
 
+    /**
+     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record AddData(String number, Integer route) {}
 
     public record CnamData(String number, Boolean cnam) {}
@@ -103,8 +123,17 @@ public final class Numbers {
 
     public record MessagingPatchData(String number, List<String> updated) {}
 
+    /**
+     * @param route Global route type on the destination account after the move:
+     *              1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID (default), 5 T38,
+     *              6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record MoveData(String number, Integer accountId, Integer route) {}
 
+    /**
+     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     */
     public record RouteData(String number, Integer route) {}
 
     public record SmsData(String number, String type, String resource) {}
