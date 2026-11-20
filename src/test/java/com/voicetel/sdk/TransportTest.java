@@ -159,16 +159,18 @@ class TransportTest {
 
     @Test
     void mapsStatusCodesToErrorKinds() {
-        for (var entry : Map.of(
-            400, ErrorKind.BAD_REQUEST,
-            401, ErrorKind.AUTHENTICATION,
-            403, ErrorKind.PERMISSION_DENIED,
-            404, ErrorKind.NOT_FOUND,
-            409, ErrorKind.CONFLICT,
-            429, ErrorKind.RATE_LIMIT,
-            500, ErrorKind.SERVER,
-            503, ErrorKind.SERVER,
-            418, ErrorKind.UNKNOWN).entrySet()) {
+        for (var entry : Map.ofEntries(
+            Map.entry(400, ErrorKind.BAD_REQUEST),
+            Map.entry(401, ErrorKind.AUTHENTICATION),
+            Map.entry(402, ErrorKind.PAYMENT_REQUIRED),
+            Map.entry(403, ErrorKind.PERMISSION_DENIED),
+            Map.entry(404, ErrorKind.NOT_FOUND),
+            Map.entry(409, ErrorKind.CONFLICT),
+            Map.entry(413, ErrorKind.REQUEST_TOO_LARGE),
+            Map.entry(429, ErrorKind.RATE_LIMIT),
+            Map.entry(500, ErrorKind.SERVER),
+            Map.entry(503, ErrorKind.SERVER),
+            Map.entry(418, ErrorKind.UNKNOWN)).entrySet()) {
             int status = entry.getKey();
             ErrorKind expected = entry.getValue();
             recorded.clear();
@@ -924,5 +926,29 @@ class TransportTest {
         ApiError e = assertThrows(ApiError.class, () -> client(0, "k").fax().document("none000001"));
         assertTrue(e.isNotFound());
         assertEquals("Not found", e.getMessage());
+    }
+
+    @Test
+    void faxSendMaps402And413ToTypedErrorKinds() {
+        // v2.2.21: 402 — the balance must be positive to send a fax;
+        // 413 — the documents must total 8 MiB or smaller.
+        routes.put("POST /v2.2/faxes", (ex, body) -> respond(ex, 402,
+            "{\"status\":\"error\",\"error\":{\"code\":402,"
+            + "\"message\":\"Your account needs a positive balance to send faxes.\"},\"serverTime\":1795100000}"));
+        ApiError e402 = assertThrows(ApiError.class, () -> client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'}))));
+        assertEquals(ErrorKind.PAYMENT_REQUIRED, e402.getKind());
+        assertEquals(402, e402.getStatusCode());
+        assertEquals(402L, e402.getCode());
+
+        routes.clear();
+        routes.put("POST /v2.2/faxes", (ex, body) -> respond(ex, 413,
+            "{\"status\":\"error\",\"error\":{\"code\":413,"
+            + "\"message\":\"The documents must total 8 MiB or smaller\"},\"serverTime\":1795100000}"));
+        ApiError e413 = assertThrows(ApiError.class, () -> client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'}))));
+        assertEquals(ErrorKind.REQUEST_TOO_LARGE, e413.getKind());
+        assertEquals(413, e413.getStatusCode());
+        assertEquals(413L, e413.getCode());
     }
 }
