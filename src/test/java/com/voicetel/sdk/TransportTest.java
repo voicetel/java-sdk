@@ -9,10 +9,12 @@ import com.voicetel.sdk.models.Account;
 import com.voicetel.sdk.models.Acl;
 import com.voicetel.sdk.models.Common.CidrEntry;
 import com.voicetel.sdk.models.E911;
+import com.voicetel.sdk.models.Fax;
 import com.voicetel.sdk.models.INumbering;
 import com.voicetel.sdk.models.Lookups;
 import com.voicetel.sdk.models.Messaging;
 import com.voicetel.sdk.models.Numbers;
+import com.voicetel.sdk.resources.FaxService;
 import com.voicetel.sdk.resources.MessagingService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -695,5 +697,232 @@ class TransportTest {
         assertEquals("Photo", mms.subject());
         assertNull(mms.ip());
         assertTrue(mms.attachments() instanceof List, "inbound attachments decode as an array");
+    }
+
+    // ------------------------------------------------- v2.2.21 additions ---
+
+    @Test
+    void aclRemoveSendsAclJsonBodyWithoutCidrsQuery() {
+        // v2.2.21: DELETE /v2.2/acl takes the same {"acl":[{cidr}]} body as
+        // POST /v2.2/acl; the old cidrs query parameter is not read.
+        routes.put("DELETE /v2.2/acl", (ex, body) -> {
+            assertEquals("{\"acl\":[{\"cidr\":\"203.0.113.0/24\"},{\"cidr\":\"198.51.100.7/32\"}]}", body);
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"removed\":[{\"cidr\":\"203.0.113.0/24\"}]}}");
+        });
+        Acl.RemoveData r = client(0, "k").acl().remove(List.of("203.0.113.0/24", "198.51.100.7/32"));
+        assertEquals(1, r.removed().size());
+        assertEquals("203.0.113.0/24", r.removed().get(0).cidr());
+
+        var req = recorded.get(0);
+        assertNull(req.query(), "the cidrs query parameter is gone in v2.2.21");
+        assertEquals("application/json", req.headers().get("content-type"));
+    }
+
+    @Test
+    void aclRemoveAcceptsModifyRequestBody() {
+        routes.put("DELETE /v2.2/acl", (ex, body) -> {
+            assertEquals("{\"acl\":[{\"cidr\":\"203.0.113.0/24\"}]}", body);
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"removed\":[{\"cidr\":\"203.0.113.0/24\"}]}}");
+        });
+        Acl.RemoveData r = client(0, "k").acl()
+            .remove(new Acl.ModifyRequest(List.of(new CidrEntry("203.0.113.0/24"))));
+        assertEquals("203.0.113.0/24", r.removed().get(0).cidr());
+        assertNull(recorded.get(0).query());
+    }
+
+    @Test
+    void aclRemoveConflictCarriesRemovedAndFailedData() throws Exception {
+        routes.put("DELETE /v2.2/acl", (ex, body) -> respond(ex, 409,
+            "{\"status\":\"error\",\"error\":{\"code\":409,\"message\":\"One or more ACL entries could not be removed\"},"
+                + "\"data\":{\"removed\":[{\"cidr\":\"203.0.113.0/24\"}],"
+                + "\"failed\":[{\"cidr\":\"203.0.113.9/32\",\"reason\":\"DB delete failed\"}]}}"));
+        ApiError e = assertThrows(ApiError.class,
+            () -> client(0, "k").acl().remove(List.of("203.0.113.0/24", "203.0.113.9/32")));
+        assertTrue(e.isConflict());
+        assertEquals(409L, e.getCode());
+        JsonNode root = Transport.MAPPER.convertValue(e.getBody(), JsonNode.class);
+        Acl.ConflictData conflict = Transport.MAPPER.treeToValue(root.get("data"), Acl.ConflictData.class);
+        assertEquals(1, conflict.removed().size());
+        assertEquals("203.0.113.0/24", conflict.removed().get(0).cidr());
+        assertEquals("203.0.113.9/32", conflict.failed().get(0).cidr());
+        assertEquals("DB delete failed", conflict.failed().get(0).reason());
+    }
+
+    @Test
+    void faxNumbersListDecodesEntries() {
+        routes.put("GET /v2.2/numbers/fax", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"numbers\":["
+                + "{\"number\":\"2015550123\",\"destinationId\":7,\"email\":\"fax@example.com\"},"
+                + "{\"number\":\"2125550123\",\"destinationId\":0,\"email\":\"account@example.com\"}]}}"));
+        Fax.NumbersData r = client(0, "k").fax().listNumbers();
+        assertEquals(2, r.numbers().size());
+        assertEquals("2015550123", r.numbers().get(0).number());
+        assertEquals(7, r.numbers().get(0).destinationId());
+        assertEquals("fax@example.com", r.numbers().get(0).email());
+        assertEquals(0, r.numbers().get(1).destinationId(), "destinationId 0 = account email");
+    }
+
+    @Test
+    void faxSendPostsMultipartWithUuidIdempotencyKey() {
+        byte[] pdf = "%PDF-1.7 mock fax document".getBytes(StandardCharsets.UTF_8);
+        routes.put("POST /v2.2/faxes", (ex, body) -> {
+            String contentType = ex.getRequestHeaders().getFirst("Content-Type");
+            assertTrue(contentType.startsWith("multipart/form-data; boundary="),
+                "content-type must be multipart, was: " + contentType);
+            String key = ex.getRequestHeaders().getFirst("Idempotency-Key");
+            assertNotNull(key, "Idempotency-Key is required on fax send");
+            assertTrue(
+                key.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),
+                "Idempotency-Key must be a UUID, was: " + key);
+
+            String boundary = contentType.substring(contentType.indexOf("boundary=") + "boundary=".length());
+            // The boundary delimits the two text fields, the file part, and
+            // the terminating marker (split leaves an empty leading segment).
+            String[] segments = body.split("--" + boundary);
+            assertEquals(5, segments.length, "multipart body was:\n" + body);
+            String all = String.join("\n", segments);
+            assertTrue(all.contains("name=\"fromNumber\""), "body was:\n" + body);
+            assertTrue(all.contains("2015550123"), "body was:\n" + body);
+            assertTrue(all.contains("name=\"toNumber\""), "body was:\n" + body);
+            assertTrue(all.contains("2125550123"), "body was:\n" + body);
+            assertTrue(all.contains("name=\"documents\"; filename=\"contract.pdf\""), "body was:\n" + body);
+            assertTrue(all.contains("Content-Type: application/pdf"), "body was:\n" + body);
+            assertTrue(all.contains("%PDF-1.7 mock fax document"), "body was:\n" + body);
+
+            respond(ex, 201, "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\","
+                + "\"fromNumber\":\"2015550123\",\"toNumber\":\"2125550123\",\"status\":\"queued\","
+                + "\"documents\":[{\"name\":\"contract.pdf\",\"size\":26,\"contentType\":\"application/pdf\"}]}}");
+        });
+        Fax.SendData r = client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", pdf)));
+        assertEquals("9f8c2b41a", r.id());
+        assertEquals("queued", r.status());
+        assertEquals("contract.pdf", r.documents().get(0).name());
+        assertEquals(26L, r.documents().get(0).size());
+    }
+
+    @Test
+    void faxSendUsesCallerSuppliedIdempotencyKey() {
+        routes.put("POST /v2.2/faxes", (ex, body) -> {
+            assertEquals("123e4567-e89b-12d3-a456-426614174000",
+                ex.getRequestHeaders().getFirst("Idempotency-Key"));
+            respond(ex, 201, "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\",\"status\":\"queued\",\"documents\":[]}}");
+        });
+        Fax.SendData r = client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'})),
+            "123e4567-e89b-12d3-a456-426614174000");
+        assertEquals("9f8c2b41a", r.id());
+    }
+
+    @Test
+    void faxSendRetryReusesTheSameIdempotencyKey() {
+        // The key pins the submission across retries, so a retried send can
+        // never deliver the same fax twice.
+        AtomicInteger calls = new AtomicInteger();
+        List<String> keys = new ArrayList<>();
+        routes.put("POST /v2.2/faxes", (ex, body) -> {
+            keys.add(ex.getRequestHeaders().getFirst("Idempotency-Key"));
+            if (calls.incrementAndGet() == 1) {
+                respond(ex, 502, "{\"status\":\"error\",\"error\":{\"code\":502,\"message\":\"processor\"}}");
+                return;
+            }
+            respond(ex, 201, "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\",\"status\":\"queued\",\"documents\":[]}}");
+        });
+        Fax.SendData r = client(1, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'})));
+        assertEquals("9f8c2b41a", r.id());
+        assertEquals(2, calls.get());
+        assertEquals(keys.get(0), keys.get(1), "retries must reuse the Idempotency-Key");
+    }
+
+    @Test
+    void faxHistorySendsQueryParameters() {
+        routes.put("GET /v2.2/faxes", (ex, body) -> {
+            assertEquals("number=2015550123&from=1795100000&to=1795013600&limit=50&cursor=cur1&status=failed",
+                ex.getRequestURI().getRawQuery());
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\","
+                + "\"fromTs\":1795100000,\"toTs\":1795013600,\"faxes\":[],\"nextCursor\":null}}");
+        });
+        Fax.HistoryData r = client(0, "k").fax().history(new FaxService.HistoryOptions(
+            "2015550123", 1795100000L, 1795013600L, 50, "cur1", "failed"));
+        assertEquals("2015550123", r.number());
+        assertEquals(1795100000L, r.fromTs());
+        assertNull(r.nextCursor());
+    }
+
+    @Test
+    void faxHistoryForNumberSendsOnlyTheRequiredParameter() {
+        routes.put("GET /v2.2/faxes", (ex, body) -> {
+            assertEquals("number=2015550123", ex.getRequestURI().getRawQuery());
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"faxes\":[]}}");
+        });
+        client(0, "k").fax().history("2015550123");
+    }
+
+    @Test
+    void faxGetDecodesFullJob() {
+        routes.put("GET /v2.2/faxes/9f8c2b41a", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\",\"fromNumber\":\"2015550123\","
+                + "\"toNumber\":\"2125550123\",\"clientToken\":\"123e4567-e89b-12d3-a456-426614174000\","
+                + "\"status\":\"sent\",\"submittedAt\":\"2026-11-20T15:04:05Z\","
+                + "\"startedAt\":\"2026-11-20T15:04:41Z\",\"completedAt\":\"2026-11-20T15:05:19Z\","
+                + "\"attempts\":1,\"failureReason\":null,"
+                + "\"documents\":[{\"name\":\"contract.pdf\",\"size\":123456,\"contentType\":\"application/pdf\"}],"
+                + "\"documentAvailable\":true,\"documentName\":\"contract.pdf\",\"documentSize\":123456}}"));
+        Fax.Job job = client(0, "k").fax().get("9f8c2b41a");
+        assertEquals("9f8c2b41a", job.id());
+        assertEquals("2015550123", job.fromNumber());
+        assertEquals("2125550123", job.toNumber());
+        assertEquals("123e4567-e89b-12d3-a456-426614174000", job.clientToken());
+        assertEquals("sent", job.status());
+        assertEquals("2026-11-20T15:04:05Z", job.submittedAt());
+        assertEquals("2026-11-20T15:05:19Z", job.completedAt());
+        assertEquals(1, job.attempts());
+        assertNull(job.failureReason());
+        assertEquals(1, job.documents().size());
+        assertEquals("contract.pdf", job.documents().get(0).name());
+        assertTrue(job.documentAvailable());
+        assertEquals("contract.pdf", job.documentName());
+        assertEquals(123456L, job.documentSize());
+    }
+
+    @Test
+    void faxDocumentReturnsRawPdfBytes() throws Exception {
+        // A payload with every byte value proves the document download hands
+        // back raw bytes, never a mangled string.
+        byte[] pdf = new byte[256];
+        for (int i = 0; i < pdf.length; i++) pdf[i] = (byte) i;
+        routes.put("GET /v2.2/faxes/9f8c2b41a/document", (ex, body) -> {
+            ex.getResponseHeaders().set("Content-Type", "application/pdf");
+            ex.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"contract.pdf\"");
+            ex.sendResponseHeaders(200, pdf.length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(pdf);
+            }
+            ex.close();
+        });
+        byte[] got = client(0, "k").fax().document("9f8c2b41a");
+        assertArrayEquals(pdf, got);
+    }
+
+    @Test
+    void faxErrorEnvelopeWithServerTimeMapsToTypedError() {
+        // The fax endpoints add "serverTime" beside status/error; error
+        // decoding must tolerate it and still pull code/message.
+        routes.put("GET /v2.2/faxes/missing001", (ex, body) -> respond(ex, 404,
+            "{\"status\":\"error\",\"error\":{\"code\":404,\"message\":\"Not found\"},\"serverTime\":1795100000}"));
+        ApiError e = assertThrows(ApiError.class, () -> client(0, "k").fax().get("missing001"));
+        assertTrue(e.isNotFound());
+        assertEquals("Not found", e.getMessage());
+        assertEquals(404L, e.getCode());
+    }
+
+    @Test
+    void faxDocument404RaisesTypedApiError() {
+        routes.put("GET /v2.2/faxes/none000001/document", (ex, body) -> respond(ex, 404,
+            "{\"status\":\"error\",\"error\":{\"code\":404,\"message\":\"Not found\"},\"serverTime\":1795100000}"));
+        ApiError e = assertThrows(ApiError.class, () -> client(0, "k").fax().document("none000001"));
+        assertTrue(e.isNotFound());
+        assertEquals("Not found", e.getMessage());
     }
 }

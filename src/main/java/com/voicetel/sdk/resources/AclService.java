@@ -2,10 +2,9 @@ package com.voicetel.sdk.resources;
 
 import com.voicetel.sdk.Transport;
 import com.voicetel.sdk.models.Acl;
+import com.voicetel.sdk.models.Common.CidrEntry;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /** IP-based access control list. */
 public final class AclService {
@@ -22,13 +21,18 @@ public final class AclService {
     }
 
     /**
-     * Remove entries from the ACL. {@code cidrs} is required and sent as a
-     * comma-separated query parameter (e.g. {@code 203.0.113.0/24}); no
-     * request body is sent.
+     * Removes entries from the ACL. Sends the same {@code {"acl":[{"cidr":...}]}}
+     * JSON body as {@link #add} (spec v2.2.21) — the handler does not read the
+     * old {@code cidrs} query parameter. Entries that do not exist fail
+     * individually: the 409 error body carries {@code removed} and
+     * {@code failed} detail on its {@code data} object.
      */
     public Acl.RemoveData remove(List<String> cidrs) {
-        Map<String, Object> q = new LinkedHashMap<>();
-        q.put("cidrs", String.join(",", cidrs));
-        return t.request("DELETE", "/v2.2/acl", q, Acl.RemoveData.class, true);
+        return remove(new Acl.ModifyRequest(cidrs.stream().map(CidrEntry::new).toList()));
+    }
+
+    /** Removes entries, taking the same body shape as {@link #add}. */
+    public Acl.RemoveData remove(Acl.ModifyRequest body) {
+        return t.request("DELETE", "/v2.2/acl", null, body, Acl.RemoveData.class, true);
     }
 }
