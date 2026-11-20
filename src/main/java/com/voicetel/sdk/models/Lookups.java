@@ -41,5 +41,10 @@ public final class Lookups {
         String jurisdiction,
         String local) {}
 
+    /**
+     * Data payload from GET /v2.2/lrn/{number}/{ani}. When the LRN dip finds
+     * no record the response is still HTTP 200 (and still billed) with
+     * {@code lrn: null} — {@link #lrn()} is nullable (spec v2.2.21).
+     */
     public record LrnLookupData(String ani, String destination, LrnData lrn) {}
 }

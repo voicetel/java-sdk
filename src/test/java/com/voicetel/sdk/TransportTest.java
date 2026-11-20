@@ -615,6 +615,19 @@ class TransportTest {
     }
 
     @Test
+    void lrnDipWithNoRecordReturns200WithNullLrn() {
+        // v2.2.21: a failed LRN dip is still HTTP 200 (and still billed) with
+        // lrn:null — the record component must hold null without throwing.
+        routes.put("GET /v2.2/lrn/2015550123/2015550100", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"ani\":\"2015550100\","
+                + "\"destination\":\"2015550123\",\"lrn\":null}}"));
+        Lookups.LrnLookupData r = client(0, "k").lookups().lrn("2015550123", "2015550100");
+        assertEquals("2015550100", r.ani());
+        assertEquals("2015550123", r.destination());
+        assertNull(r.lrn(), "lrn must be null when the dip found no record");
+    }
+
+    @Test
     void e911AddressidRoundTripsAsString() {
         // v2.2.20: the validated-address id is a hex string, not an integer,
         // on both the validation response and the provision-by-id request.
