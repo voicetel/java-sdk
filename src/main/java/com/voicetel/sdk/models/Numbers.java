@@ -1,6 +1,7 @@
 package com.voicetel.sdk.models;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
 
@@ -12,16 +13,20 @@ public final class Numbers {
     // ---------------------------------------------------------- requests ---
 
     /**
-     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
-     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE. An unknown
+     *              route is rejected with 400.
      */
     public record AddRequest(String number, Integer route) {
         public AddRequest(String number) { this(number, null); }
     }
 
     /**
-     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
-     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE. An unknown
+     *              route is rejected with 400.
      */
     public record RouteRequest(Integer route) {}
 
@@ -49,17 +54,89 @@ public final class Numbers {
     public record CampaignAssignRequest(String campaignId) {}
 
     /**
-     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
-     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE. An unknown
+     *              route is rejected with 400.
      */
     public record MoveRequest(Integer accountId, Integer route) {}
 
     public record PortOutPinUpdateRequest(String pin) {}
 
+    // ------------------------------------------------ directory listing (411) ---
+
+    /**
+     * A 411 directory listing as published (or, on PUT, as submitted).
+     * {@code type} "B" carries the business name in {@code name}; "R" carries
+     * {@code firstName} / {@code lastName}. All address fields may be empty
+     * strings. {@code complex} marks a multi-line listing, which is read-only
+     * through the API.
+     */
+    public record DirectoryListing(
+        String type,
+        String name,
+        String firstName,
+        String lastName,
+        String streetNumber,
+        String streetName,
+        String streetType,
+        String streetSuffix,
+        String location,
+        String city,
+        String state,
+        String zip,
+        Boolean complex) {}
+
+    /**
+     * PUT /v2.2/numbers/{number}/directory-listing — add or replace the
+     * listing. {@code type} is "business" or "residence" (the shorthand "B"
+     * and "R" is also accepted by the server). A business sets {@code name};
+     * a residence sets {@code firstName} and {@code lastName}. The street is
+     * optional — give {@code streetNumber} and {@code streetName} together,
+     * or neither; {@code streetSuffix} and {@code location} require a street
+     * name. {@code city}, {@code state} (two-letter US state or territory
+     * code), and {@code zip} (5 digits; a ZIP+4 is accepted and stored as the
+     * 5-digit ZIP) are required. Nulls are not serialized — only the fields
+     * you set are sent.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record DirectoryListingRequest(
+        String type,
+        String name,
+        String firstName,
+        String lastName,
+        String streetNumber,
+        String streetName,
+        String streetType,
+        String streetSuffix,
+        String location,
+        String city,
+        String state,
+        String zip) {}
+
+    /**
+     * Data payload from GET/PUT/DELETE /v2.2/numbers/{number}/directory-listing.
+     * PUT and DELETE are accepted at once (HTTP 202) and applied in the
+     * background: {@code status} is "pending" / "removing" (or "not_listed"
+     * when a pending add was cancelled, with no {@code orderId}) and
+     * {@code orderId} carries the carrier order reference. GET reports the
+     * state as published — {@code status} is "listed", "not_listed",
+     * "pending", "removing", or "unavailable" — with {@code eligible} telling
+     * whether a listing can be added.
+     */
+    public record DirectoryListingData(
+        String number,
+        String status,
+        Boolean eligible,
+        DirectoryListing listing,
+        DirectoryListing pending,
+        String orderId) {}
+
     // ------------------------------------------------ entities & responses ---
 
     /**
-     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
      *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
      */
     public record Detail(
@@ -108,7 +185,8 @@ public final class Numbers {
         MessagingEnablementJob pending) {}
 
     /**
-     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
      *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
      */
     public record AddData(String number, Integer route) {}
@@ -124,14 +202,16 @@ public final class Numbers {
     public record MessagingPatchData(String number, List<String> updated) {}
 
     /**
-     * @param route Global route type on the destination account after the move:
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route on the destination account after the move:
      *              1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID (default), 5 T38,
      *              6 VOICEML, 8 SDN, 9 MOBILE.
      */
     public record MoveData(String number, Integer accountId, Integer route) {}
 
     /**
-     * @param route Global route type: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
      *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE.
      */
     public record RouteData(String number, Integer route) {}

@@ -8,9 +8,12 @@ import com.sun.net.httpserver.HttpServer;
 import com.voicetel.sdk.models.Account;
 import com.voicetel.sdk.models.Acl;
 import com.voicetel.sdk.models.Common.CidrEntry;
+import com.voicetel.sdk.models.E911;
 import com.voicetel.sdk.models.INumbering;
+import com.voicetel.sdk.models.Lookups;
 import com.voicetel.sdk.models.Messaging;
 import com.voicetel.sdk.models.Numbers;
+import com.voicetel.sdk.resources.MessagingService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -510,5 +513,187 @@ class TransportTest {
         assertNotNull(me.services());
         assertTrue(me.services().sms());
         assertNotNull(me.rates());
+    }
+
+    // ------------------------------------------------- v2.2.20 additions ---
+
+    private static final String LISTING_JSON =
+        "\"listing\":{\"type\":\"B\",\"name\":\"Acme Corp\","
+            + "\"streetNumber\":\"100\",\"streetName\":\"Broadway\",\"streetType\":\"St\","
+            + "\"streetSuffix\":\"\",\"location\":\"Suite 900\",\"city\":\"New York\","
+            + "\"state\":\"NY\",\"zip\":\"10005\",\"complex\":false}";
+
+    @Test
+    void directoryListingGetDecodesPublishedState() {
+        routes.put("GET /v2.2/numbers/2015550123/directory-listing", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"status\":\"listed\","
+                + "\"eligible\":true," + LISTING_JSON + ",\"pending\":null}}"));
+        var r = client(0, "k").numbers().getDirectoryListing("2015550123");
+        assertEquals("listed", r.status());
+        assertTrue(r.eligible());
+        assertEquals("B", r.listing().type());
+        assertEquals("Acme Corp", r.listing().name());
+        assertEquals("Suite 900", r.listing().location());
+        assertFalse(r.listing().complex());
+        assertNull(r.pending());
+        assertNull(r.orderId());
+    }
+
+    @Test
+    void directoryListingPutSendsBodyAndDecodes202() {
+        routes.put("PUT /v2.2/numbers/2015550123/directory-listing", (ex, body) -> {
+            assertTrue(body.contains("\"type\":\"business\""), "body was: " + body);
+            assertTrue(body.contains("\"name\":\"Acme Corp\""), "body was: " + body);
+            assertTrue(body.contains("\"city\":\"New York\""), "body was: " + body);
+            assertTrue(body.contains("\"zip\":\"10005\""), "body was: " + body);
+            // Only fields the caller set are emitted.
+            assertFalse(body.contains("firstName"), "body was: " + body);
+            assertFalse(body.contains("complex"), "body was: " + body);
+            respond(ex, 202,
+                "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"status\":\"pending\","
+                    + "\"orderId\":\"1026472\",\"listing\":{\"type\":\"B\",\"name\":\"Acme Corp\","
+                    + "\"streetNumber\":\"100\",\"streetName\":\"Broadway\",\"streetType\":\"St\","
+                    + "\"streetSuffix\":\"\",\"location\":\"Suite 900\",\"city\":\"New York\","
+                    + "\"state\":\"NY\",\"zip\":\"10005\"}}}");
+        });
+        var r = client(0, "k").numbers().setDirectoryListing("2015550123",
+            new Numbers.DirectoryListingRequest(
+                "business", "Acme Corp", null, null,
+                "100", "Broadway", "St", null, "Suite 900",
+                "New York", "NY", "10005"));
+        // 202 is a success; the change is applied in the background.
+        assertEquals("pending", r.status());
+        assertEquals("1026472", r.orderId());
+        assertEquals("Acme Corp", r.listing().name());
+        assertNull(r.listing().complex(), "the echoed listing carries no complex flag");
+    }
+
+    @Test
+    void directoryListingDeleteDecodes202AndCancel() {
+        routes.put("DELETE /v2.2/numbers/2015550123/directory-listing", (ex, body) -> respond(ex, 202,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"status\":\"removing\","
+                + "\"orderId\":\"1026473\"}}"));
+        var r = client(0, "k").numbers().removeDirectoryListing("2015550123");
+        assertEquals("removing", r.status());
+        assertEquals("1026473", r.orderId());
+
+        routes.remove("DELETE /v2.2/numbers/2015550123/directory-listing");
+        routes.put("DELETE /v2.2/numbers/2015550177/directory-listing", (ex, body) -> respond(ex, 202,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550177\",\"status\":\"not_listed\"}}"));
+        var cancel = client(0, "k").numbers().removeDirectoryListing("2015550177");
+        assertEquals("not_listed", cancel.status());
+        assertNull(cancel.orderId(), "a cancelled add creates no carrier order");
+    }
+
+    @Test
+    void carrierLookupDecodesUpstreamSnakeCaseFields() {
+        routes.put("GET /v2.2/carrier/2015550123", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\","
+                + "\"carrier\":{\"name\":\"EXAMPLE CARRIER\",\"type\":\"voip\","
+                + "\"mobile_country_code\":null,\"mobile_network_code\":null,\"error_code\":null}}}"));
+        Lookups.CarrierData r = client(0, "k").lookups().carrier("2015550123");
+        assertEquals("2015550123", r.number());
+        assertEquals("EXAMPLE CARRIER", r.carrier().name());
+        assertEquals("voip", r.carrier().type());
+        assertNull(r.carrier().mobileCountryCode());
+        assertNull(r.carrier().mobileNetworkCode());
+        assertNull(r.carrier().errorCode());
+
+        routes.remove("GET /v2.2/carrier/2015550123");
+        routes.put("GET /v2.2/carrier/2015550100", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550100\","
+                + "\"carrier\":{\"name\":\"MOBILE CARRIER\",\"type\":\"mobile\","
+                + "\"mobile_country_code\":\"310\",\"mobile_network_code\":\"456\",\"error_code\":0}}}"));
+        Lookups.CarrierData mobile = client(0, "k").lookups().carrier("2015550100");
+        assertEquals("310", mobile.carrier().mobileCountryCode());
+        assertEquals("456", mobile.carrier().mobileNetworkCode());
+        assertEquals(0, mobile.carrier().errorCode());
+    }
+
+    @Test
+    void e911AddressidRoundTripsAsString() {
+        // v2.2.20: the validated-address id is a hex string, not an integer,
+        // on both the validation response and the provision-by-id request.
+        routes.put("POST /v2.2/e911/validations", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"address\":{"
+                + "\"addressid\":\"123a45b678c9d012e3f45a67b890c123\","
+                + "\"address1\":\"100 Broadway\",\"city\":\"New York\","
+                + "\"state\":\"NY\",\"zip\":\"10005\"}}}"));
+        routes.put("PUT /v2.2/e911/2015550123", (ex, body) -> {
+            assertTrue(body.contains("\"addressid\":\"123a45b678c9d012e3f45a67b890c123\""),
+                "addressid must be sent as a string, body was: " + body);
+            respond(ex, 200,
+                "{\"status\":\"success\",\"data\":{\"record\":{\"dn\":\"12015550123\",\"callername\":\"Acme\"}}}");
+        });
+
+        E911.ValidateData v = client(0, "k").e911()
+            .validate(new E911.AddressRequest("100 Broadway", null, "New York", "NY", "10005"));
+        assertEquals("123a45b678c9d012e3f45a67b890c123", v.address().addressid());
+        E911.RecordData p = client(0, "k").e911()
+            .provision("2015550123", new E911.ProvisionByIdRequest("Acme", v.address().addressid()));
+        assertEquals("Acme", p.record().callername());
+    }
+
+    @Test
+    void ordersCreateDecodesRoutes() {
+        // v2.2.20: POST /v2.2/orders returns the route each ordered number
+        // was placed on.
+        routes.put("POST /v2.2/orders", (ex, body) -> respond(ex, 201,
+            "{\"status\":\"success\",\"data\":{\"orderId\":\"ORD-1\",\"amountCharged\":1.0,"
+                + "\"numbersOrdered\":[\"2015550100\"],\"failed\":[],"
+                + "\"routes\":[{\"number\":\"2015550100\",\"route\":4}]}}"));
+        INumbering.OrderCreateData r = client(0, "k").iNumbering()
+            .order(new INumbering.OrderCreateRequest(
+                List.of(INumbering.OrderNumber.of("2015550100"))));
+        assertEquals(1, r.routes().size());
+        assertEquals("2015550100", r.routes().get(0).number());
+        assertEquals(4, r.routes().get(0).route());
+    }
+
+    @Test
+    void messageSendMediaOnlyMmsOmitsText() throws Exception {
+        // v2.2.20: text is optional (media-only MMS is valid) and nulls are
+        // not serialized.
+        routes.put("POST /v2.2/messages", (ex, body) -> {
+            JsonNode sent = new ObjectMapper().readTree(body);
+            assertFalse(sent.has("text"), "media-only MMS must omit text, body was: " + body);
+            assertFalse(sent.has("subject"), "body was: " + body);
+            assertEquals(List.of("https://example.com/photo.jpg"),
+                new ObjectMapper().convertValue(sent.get("mediaUrls"), List.class));
+            respond(ex, 202,
+                "{\"status\":\"success\",\"data\":{\"id\":\"m-1\",\"type\":\"mms\","
+                    + "\"fromNumber\":\"2015550123\",\"toNumber\":\"2015550100\",\"parts\":1}}");
+        });
+        Messaging.SendData r = client(0, "k").messaging().send(new Messaging.SendRequest(
+            "2015550123", "2015550100", null, null,
+            List.of("https://example.com/photo.jpg")));
+        assertEquals("mms", r.type());
+        assertEquals(1, r.parts());
+    }
+
+    @Test
+    void messageHistoryValueDecodesV2220Fields() {
+        routes.put("GET /v2.2/messages", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"type\":\"dlr\","
+                + "\"messages\":[{\"id\":\"r1\",\"key\":[\"12015550123\",1747345100],"
+                + "\"value\":{\"sourceNumber\":\"12015550123\",\"destinationNumber\":\"12015550100\","
+                + "\"messageText\":\"stat:DELIVRD\",\"transactionGUID\":\"g-1\","
+                + "\"concatenatedMessage\":\"2\"}}"
+                + ",{\"id\":\"m2\",\"key\":[1,\"2015550123\",1747345200],"
+                + "\"value\":{\"direction\":\"in\",\"number\":\"2015550123\",\"message\":\"\","
+                + "\"attachments\":[{\"contentFile\":\"https://x/f.jpg\",\"contentType\":\"image/jpeg\"}],"
+                + "\"subject\":\"Photo\",\"ip\":null}}]}}"));
+        Messaging.HistoryData r = client(0, "k").messaging()
+            .history(MessagingService.HistoryOptions.forNumber("2015550123"));
+
+        Messaging.RecordValue dlr = r.messages().get(0).value();
+        assertEquals("stat:DELIVRD", dlr.messageText());
+        assertEquals("g-1", dlr.transactionGUID());
+        assertEquals("2", dlr.concatenatedMessage());
+
+        Messaging.RecordValue mms = r.messages().get(1).value();
+        assertEquals("Photo", mms.subject());
+        assertNull(mms.ip());
+        assertTrue(mms.attachments() instanceof List, "inbound attachments decode as an array");
     }
 }

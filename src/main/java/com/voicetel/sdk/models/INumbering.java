@@ -40,9 +40,10 @@ public final class INumbering {
     }
 
     /**
-     * @param route Global route type for numbers in this order: 1 USER, 2 T30,
-     *              3 VOICE_BRIDGE, 4 DID (default), 5 T38, 6 VOICEML, 8 SDN,
-     *              9 MOBILE.
+     * @param route A gateway id on this account (GET /v2.2/gateways) or a
+     *              global route: 1 USER, 2 T30, 3 VOICE_BRIDGE, 4 DID
+     *              (default), 5 T38, 6 VOICEML, 8 SDN, 9 MOBILE. An unknown
+     *              route fails the whole order.
      */
     public record OrderNumberSpec(String number, Integer route) {}
 
@@ -117,8 +118,20 @@ public final class INumbering {
 
     public record OrderFailedEntry(String number, String reason) {}
 
-    /** {@code amountCharged} is the amount deducted from the account balance. */
-    public record OrderCreateData(String orderId, Double amountCharged, List<String> numbersOrdered, List<OrderFailedEntry> failed) {}
+    /** One row in {@link OrderCreateData#routes()} — the route each ordered number was placed on. */
+    public record OrderRoute(String number, Integer route) {}
+
+    /**
+     * {@code amountCharged} is the amount deducted from the account balance.
+     * {@code routes} carries the route each ordered number was placed on
+     * (null when the server omits it).
+     */
+    public record OrderCreateData(
+        String orderId,
+        Double amountCharged,
+        List<String> numbersOrdered,
+        List<OrderRoute> routes,
+        List<OrderFailedEntry> failed) {}
 
     public record PortListData(List<PortSummary> ports) {}
 

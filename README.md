@@ -2,7 +2,7 @@
 
 The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/api/v2.2/) — provision numbers, place orders, validate e911, send messages, and manage your account, with strongly-typed records and modern `java.net.http`.
 
-![Version](https://img.shields.io/badge/version-2.2.17-blue)
+![Version](https://img.shields.io/badge/version-2.2.20-blue)
 ![Java](https://img.shields.io/badge/java-17%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Build](https://github.com/voicetel/java-sdk/actions/workflows/ci.yml/badge.svg)
@@ -25,7 +25,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 ## ✨ Features
 
 ### 🛡️ Strongly Typed End-to-End
-- **Java 17 records** for every one of the 79 API operations — request bodies, response payloads, and entity types.
+- **Java 17 records** for every one of the 83 API operations — request bodies, response payloads, and entity types.
 - **Jackson-databind** serialization with `@JsonIgnoreProperties(ignoreUnknown = true)` so server-side field additions never break clients.
 - **No generated code, no annotation processors.** Hand-written, navigable in any IDE.
 
@@ -41,12 +41,12 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 - **`ApiError`** with a typed `ErrorKind` enum, so you can `switch (err.getKind()) { case RATE_LIMIT: ... }` without parsing HTTP status codes.
 
 ### 📞 Complete API Coverage
-- **Numbers** — list, get, add, remove, route, translate, CNAM, LIDB, fax, forward, SMS, messaging campaigns, port-out PIN, account moves.
+- **Numbers** — list, get, add, remove, route, translate, CNAM, LIDB, directory listing (411), fax, forward, SMS, messaging campaigns, port-out PIN, account moves.
 - **Account** — profile, sub-accounts, CDRs, credits, payments, MRC, registration, password recovery.
 - **e911** — record provisioning, address validation, lookup, removal.
 - **Gateways** — list, create, update, delete, view bound numbers.
 - **Messaging** — SMS & MMS sending, message history, 10DLC brand and campaign registration, per-number messaging state, and messaging health (account overview, per-number live check, spam-blocked samples, alert-email setting).
-- **Lookups** — CNAM and LRN dips.
+- **Lookups** — CNAM, carrier & line type, and LRN dips.
 - **iNumbering** — inventory search, coverage queries, number orders, port-in submissions, port-out availability checks.
 - **Support** — ticket create / read / update / delete, threaded messages, replies.
 - **ACL** — IP allowlist management with structured 409 conflict bodies.
@@ -65,7 +65,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 <dependency>
   <groupId>com.voicetel</groupId>
   <artifactId>voicetel-sdk</artifactId>
-  <version>2.2.17</version>
+  <version>2.2.20</version>
 </dependency>
 ```
 
@@ -73,7 +73,7 @@ The official Java client for the [VoiceTel REST API](https://voicetel.com/docs/a
 
 ```kotlin
 dependencies {
-    implementation("com.voicetel:voicetel-sdk:2.2.17")
+    implementation("com.voicetel:voicetel-sdk:2.2.20")
 }
 ```
 
@@ -143,7 +143,7 @@ String key = client.login("1000000001", "hunter2");
 | e911 | `client.e911()` | `client.e911().validate(new E911.AddressRequest(...))` |
 | Gateways | `client.gateways()` | `client.gateways().list()` |
 | iNumbering | `client.iNumbering()` | `client.iNumbering().searchInventory(new InventoryQuery("201555*"))` |
-| Lookups | `client.lookups()` | `client.lookups().lrn("2015550123", "2015550100")` |
+| Lookups | `client.lookups()` | `client.lookups().carrier("2015550123")` |
 | Messaging | `client.messaging()` | `client.messaging().send(new Messaging.SendRequest(from, to, text))` |
 | Numbers | `client.numbers()` | `client.numbers().assignCampaign("2015550123", new Numbers.CampaignAssignRequest("C1"))` |
 | Support | `client.support()` | `client.support().create(new Support.CreateRequest("subject", "body"))` |

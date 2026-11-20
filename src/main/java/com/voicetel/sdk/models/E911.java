@@ -25,7 +25,11 @@ public final class E911 {
         String state,
         String zip) {}
 
-    public record ProvisionByIdRequest(String callername, Integer addressid) {}
+    /**
+     * @param addressid Upstream address id from POST /v2.2/e911/validations
+     *                  — a hex string, not an integer.
+     */
+    public record ProvisionByIdRequest(String callername, String addressid) {}
 
     public record Entry(
         String dn,
@@ -36,7 +40,11 @@ public final class E911 {
         String state,
         String zip) {}
 
-    public record ValidatedAddress(Integer addressid, String address1, String address2, String city, String state, String zip) {}
+    /**
+     * @param addressid Upstream address id (hex string) — pass it to
+     *                  {@link ProvisionByIdRequest} to provision the address.
+     */
+    public record ValidatedAddress(String addressid, String address1, String address2, String city, String state, String zip) {}
 
     public record AllData(List<Entry> records) {}
 
