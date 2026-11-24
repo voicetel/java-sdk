@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.2.21 — 2026-11-20
+
+Audit release: the new Fax API, plus a breaking wire fix for ACL removal.
+
+### Added
+- **Fax** resource (`client.fax()`, spec tag "Fax"):
+  - `listNumbers()` — every fax-capable number on the account and the email each delivers to (`destinationId` 0 = the account email).
+  - `send(fromNumber, toNumber, documents)` / `send(fromNumber, toNumber, documents, idempotencyKey)` — `POST /v2.2/faxes` as `multipart/form-data` (`fromNumber` and `toNumber` text fields plus 1–10 PDF/DOC/DOCX file parts, magic-byte checked, 8 MiB each and in total). The multipart body is hand-built in the transport — no new dependencies. A fresh `Idempotency-Key` UUID is generated per send and reused across retries; resubmitting the same documents with the same key returns the original job instead of sending twice. Rate-limited to 10 sends per minute per account (429 with `Retry-After: 60`, honored by the transport).
+  - `history(FaxService.HistoryOptions.forNumber("2015550123"))` — newest-first job history for one number with `from`/`to` (unix seconds; `from` is the newer edge, defaults last 24h), `limit` 1–100 (default 50), `cursor` paging from a previous `nextCursor`, and `status` filtering (`all|active|queued|sending|retry_pending|sent|failed`).
+  - `get(id)` — one job (`id` pattern `^[A-Za-z0-9_-]{1,128}$`); poll until `status` is `sent` or `failed`.
+  - `document(id)` — the rendered PDF of a fax as raw bytes (`GET /v2.2/faxes/{id}/document`, binary response; the transport gained a raw-bytes download path).
+  - The fax error envelope adds `serverTime` beside status/error; it is ignored by error decoding (unknown fields are tolerated everywhere).
+- Typed error kinds for HTTP 402 (`PAYMENT_REQUIRED` — positive balance required: fax send, directory listing) and HTTP 413 (`REQUEST_TOO_LARGE` — upload over 8 MiB), both previously mapped to `UNKNOWN`.
+
+### Changed (breaking wire fix)
+- `DELETE /v2.2/acl` now sends the same `{"acl":[{"cidr":"..."}]}` JSON **body** as `POST /v2.2/acl` and **no `cidrs` query parameter** — the live v2.2.0 handler never read the query param. `acl().remove(List<String>)` keeps its signature; an overload taking `Acl.ModifyRequest` mirrors `add`. The 409 partial-failure payload (`data.removed` / `data.failed`) stays available on `ApiError.getBody()`, as before.
+
+### Housekeeping
+- Version 2.2.21; README updated (88 operations, Fax resource row, fax-send rate limit).
+
+## 2.2.20 — 2026-11-20
+
+Spec v2.2.20 sync. Adds the four new operations and tracks the truth fixes from spec v2.2.18–v2.2.20.
+
+### Added
+- **Directory listing (411)** on a number: `client.numbers().getDirectoryListing(number)`, `.setDirectoryListing(number, Numbers.DirectoryListingRequest(...))`, `.removeDirectoryListing(number)` — GET returns the published state (`status` listed / not_listed / pending / removing / unavailable, `eligible`, `listing`, `pending`); PUT/DELETE are accepted at once (HTTP 202, applied in the background) with an `orderId`.
+- **Carrier & line-type lookup**: `client.lookups().carrier(number)` — carrier details with the upstream field names (`mobile_country_code`, `mobile_network_code`, `error_code`); billed per lookup at the account's CNAM rate.
+- `OrderCreateData.routes` — POST /v2.2/orders now returns the route each ordered number was placed on.
+
+### Changed
+- e911 `addressid` is a **string** (hex), not an integer, on both the validation response and `E911.ProvisionByIdRequest`.
+- `Messaging.SendRequest.text` is optional (media-only MMS is valid; nulls are no longer serialized — only the fields you set are sent); `subject` is deprecated; `mediaUrls` must be non-empty.
+- Message-history `RecordValue` carries the full field set: `messageText`, `transactionGUID`, `concatenatedMessage` (dlr), `attachments` (mms), `subject` (mms), `ip` (outbound sms).
+- DID `route` fields accept any gateway id on the account in addition to the global routes; an unknown route is rejected by the API with 400.
+
 ## 2.2.17 — 2026-10-17
 
 Spec v2.2.17 sync.

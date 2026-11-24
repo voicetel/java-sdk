@@ -1,6 +1,7 @@
 package com.voicetel.sdk.models;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
 
@@ -13,12 +14,22 @@ public final class Messaging {
      * Body for POST /v2.2/messages. Wire field names are {@code fromNumber} /
      * {@code toNumber} — the older {@code from} / {@code to} would collide
      * with Java reserved-ish naming.
+     *
+     * <p>{@code text} is required for SMS and optional for MMS (at most 2048
+     * characters there) — pass null with {@code mediaUrls} set to send a
+     * media-only MMS. {@code mediaUrls}, when set, must contain at least one
+     * publicly reachable http(s) URL; its presence makes the message an MMS.
+     * Nulls are not serialized — only the fields you set are sent.
+     *
+     * @param subject Deprecated by the API: accepted for compatibility but
+     *                not delivered on most messaging routes; do not rely on it.
      */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record SendRequest(
         String fromNumber,
         String toNumber,
         String text,
-        String subject,
+        @Deprecated String subject,
         List<String> mediaUrls) {
         public SendRequest(String fromNumber, String toNumber, String text) {
             this(fromNumber, toNumber, text, null, null);
@@ -46,13 +57,30 @@ public final class Messaging {
         }
     }
 
+    /**
+     * Per-record fields inside {@link Record}. Shape varies by {@code type}.
+     * For sms/mms: {@code number} (the far-end TN), {@code direction},
+     * {@code rate} and {@code message} populated — plus {@code ip} on
+     * outbound sms and {@code subject} / {@code attachments} on mms
+     * (inbound: one object per media file; outbound: the submitted URL(s) as
+     * a string or array). For dlr: {@code sourceNumber},
+     * {@code destinationNumber}, {@code messageText} (the receipt as
+     * received), {@code transactionGUID} (the id of the message it receipts),
+     * and {@code concatenatedMessage} on some multi-part receipts.
+     */
     public record RecordValue(
         String sourceNumber,
         String destinationNumber,
         String direction,
         String rate,
         String number,
-        String message) {}
+        String message,
+        String messageText,
+        String transactionGUID,
+        String concatenatedMessage,
+        Object attachments,
+        String subject,
+        String ip) {}
 
     public record Record(String id, List<Object> key, RecordValue value) {}
 

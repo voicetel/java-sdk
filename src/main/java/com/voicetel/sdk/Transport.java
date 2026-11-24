@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -16,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -74,56 +76,88 @@ public final class Transport {
 
     /** GET / DELETE with no body. */
     public <T> T request(String method, String path, Map<String, Object> query, Class<T> type, boolean requireAuth) {
-        return doRequest(method, path, query, null, type, requireAuth);
+        return doRequest(method, path, query, null, type, requireAuth, null);
     }
 
     /** POST / PUT / PATCH with a JSON body. */
     public <T> T request(String method, String path, Map<String, Object> query, Object body, Class<T> type, boolean requireAuth) {
-        return doRequest(method, path, query, body, type, requireAuth);
+        return doRequest(method, path, query, body, type, requireAuth, null);
     }
 
     /** 204-style endpoints (no response body). */
     public void requestNoBody(String method, String path, Object body, boolean requireAuth) {
-        doRequest(method, path, null, body, Void.class, requireAuth);
+        doRequest(method, path, null, body, Void.class, requireAuth, null);
     }
 
-    private <T> T doRequest(String method, String path, Map<String, Object> query, Object body, Class<T> type, boolean requireAuth) {
+    /**
+     * POST a {@code multipart/form-data} body (file uploads). The response is
+     * decoded like any other JSON envelope. {@code idempotencyKey} optionally
+     * pins the Idempotency-Key header (e.g. resubmitting a fax must reuse the
+     * original key); null generates a fresh UUID, reused across retries.
+     */
+    public <T> T requestMultipart(String path, MultipartForm form, String idempotencyKey, Class<T> type, boolean requireAuth) {
+        requireApiKey(requireAuth);
+        // Fax send requires a client-generated UUID key; default a null
+        // override to a fresh UUID, computed once so retries reuse it.
+        String key = idempotencyKey != null ? idempotencyKey : UUID.randomUUID().toString();
+        return execute("POST", URI.create(baseUrl + path), form.encode(), form.contentType(), key,
+            requireAuth, "application/json", gzipAwareString(), resp -> decode(resp, type));
+    }
+
+    /**
+     * Request returning the raw response bytes (binary downloads — e.g. the
+     * fax document PDF). Non-2xx responses raise the usual typed
+     * {@link ApiError} with the parsed error envelope.
+     */
+    public byte[] requestBytes(String method, String path, boolean requireAuth) {
+        requireApiKey(requireAuth);
+        return execute(method, URI.create(baseUrl + path), null, null, null,
+            requireAuth, "application/pdf, application/json", gzipAwareBytes(), this::decodeBytes);
+    }
+
+    private void requireApiKey(boolean requireAuth) {
         if (requireAuth && (apiKey == null || apiKey.isEmpty())) {
             throw new ApiError(
                 "no api key set; pass apiKey to ClientOptions or call client.login()",
                 ErrorKind.AUTHENTICATION);
         }
-        URI uri = URI.create(baseUrl + path + queryString(query));
-        byte[] bodyBytes = serializeBody(body);
-        String idempotencyKey = ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))
-            ? UUID.randomUUID().toString() : null;
+    }
 
+    private <T> T doRequest(String method, String path, Map<String, Object> query, Object body,
+                            Class<T> type, boolean requireAuth, String keyOverride) {
+        requireApiKey(requireAuth);
+        URI uri = URI.create(baseUrl + path + queryString(query));
+        byte[] bodyBytes;
+        String contentType;
+        if (body instanceof MultipartForm form) {
+            bodyBytes = form.encode();
+            contentType = form.contentType();
+        } else {
+            bodyBytes = serializeBody(body);
+            contentType = "application/json";
+        }
+        String idempotencyKey = keyOverride != null ? keyOverride
+            : (("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))
+                ? UUID.randomUUID().toString() : null);
+
+        return execute(method, uri, bodyBytes, contentType, idempotencyKey, requireAuth,
+            "application/json", gzipAwareString(), resp -> decode(resp, type));
+    }
+
+    @FunctionalInterface
+    private interface ResponseDecoder<R, T> {
+        T decode(HttpResponse<R> resp);
+    }
+
+    private <R, T> T execute(String method, URI uri, byte[] bodyBytes, String contentType, String idempotencyKey,
+                             boolean requireAuth, String accept, HttpResponse.BodyHandler<R> bodyHandler,
+                             ResponseDecoder<R, T> decoder) {
         Throwable lastError = null;
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
-            HttpRequest.Builder b = HttpRequest.newBuilder(uri)
-                .timeout(timeout)
-                .header("User-Agent", userAgent)
-                .header("Accept", "application/json")
-                .header("Accept-Encoding", "gzip");
-            if (requireAuth) b.header("Authorization", "Bearer " + apiKey);
-            if (idempotencyKey != null) b.header("Idempotency-Key", idempotencyKey);
-            HttpRequest.BodyPublisher pub = bodyBytes != null
-                ? HttpRequest.BodyPublishers.ofByteArray(bodyBytes)
-                : HttpRequest.BodyPublishers.noBody();
-            if (bodyBytes != null) b.header("Content-Type", "application/json");
-            switch (method) {
-                case "GET" -> b.GET();
-                case "DELETE" -> b.method("DELETE", pub);
-                case "POST" -> b.POST(pub);
-                case "PUT" -> b.PUT(pub);
-                case "PATCH" -> b.method("PATCH", pub);
-                default -> throw new ApiError("unsupported method " + method, ErrorKind.UNKNOWN);
-            }
-            HttpRequest req = b.build();
-
-            HttpResponse<String> resp;
+            HttpRequest req = newRequest(uri, method, bodyBytes, contentType, idempotencyKey, requireAuth, accept);
+            HttpResponse<R> resp;
             try {
-                resp = httpClient.send(req, gzipAwareString());
+                resp = httpClient.send(req, bodyHandler);
             } catch (IOException ex) {
                 lastError = ex;
                 if (attempt >= maxRetries) {
@@ -142,10 +176,34 @@ public final class Transport {
                 sleep(backoffMillis(attempt, resp));
                 continue;
             }
-            return decode(resp, type);
+            return decoder.decode(resp);
         }
         // Defensive — the loop always returns or throws.
         throw new ApiError("retry loop exhausted", ErrorKind.UNKNOWN, lastError);
+    }
+
+    private HttpRequest newRequest(URI uri, String method, byte[] bodyBytes, String contentType,
+                                   String idempotencyKey, boolean requireAuth, String accept) {
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri)
+            .timeout(timeout)
+            .header("User-Agent", userAgent)
+            .header("Accept", accept)
+            .header("Accept-Encoding", "gzip");
+        if (requireAuth) b.header("Authorization", "Bearer " + apiKey);
+        if (idempotencyKey != null) b.header("Idempotency-Key", idempotencyKey);
+        HttpRequest.BodyPublisher pub = bodyBytes != null
+            ? HttpRequest.BodyPublishers.ofByteArray(bodyBytes)
+            : HttpRequest.BodyPublishers.noBody();
+        if (bodyBytes != null && contentType != null) b.header("Content-Type", contentType);
+        switch (method) {
+            case "GET" -> b.GET();
+            case "DELETE" -> b.method("DELETE", pub);
+            case "POST" -> b.POST(pub);
+            case "PUT" -> b.PUT(pub);
+            case "PATCH" -> b.method("PATCH", pub);
+            default -> throw new ApiError("unsupported method " + method, ErrorKind.UNKNOWN);
+        }
+        return b.build();
     }
 
     @SuppressWarnings("unchecked")
@@ -174,8 +232,23 @@ public final class Transport {
             }
         }
 
-        // Error path. The spec envelope is
-        // {"status":"error","error":{"code":<int>,"message":<string>}}.
+        throw errorFrom(status, text);
+    }
+
+    private byte[] decodeBytes(HttpResponse<byte[]> resp) {
+        int status = resp.statusCode();
+        byte[] bytes = resp.body() == null ? new byte[0] : resp.body();
+        if (status >= 200 && status < 300) return bytes;
+        throw errorFrom(status, new String(bytes, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The spec error envelope is
+     * {@code {"status":"error","error":{"code":<int>,"message":<string>}}}.
+     * Endpoints may add fields beside it (the fax API carries
+     * {@code serverTime}) — everything outside {@code error} is ignored.
+     */
+    private ApiError errorFrom(int status, String text) {
         Object body = text;
         Long code = null;
         String message = "HTTP " + status;
@@ -194,7 +267,7 @@ public final class Transport {
         } catch (JsonProcessingException ignored) {
             // body stays as raw text.
         }
-        throw new ApiError(message, ErrorKind.fromStatus(status), status, code, body);
+        return new ApiError(message, ErrorKind.fromStatus(status), status, code, body);
     }
 
     private byte[] serializeBody(Object body) {
@@ -283,7 +356,84 @@ public final class Transport {
         };
     }
 
+    private static HttpResponse.BodyHandler<byte[]> gzipAwareBytes() {
+        return responseInfo -> {
+            String encoding = responseInfo.headers().firstValue("Content-Encoding").orElse("");
+            if ("gzip".equalsIgnoreCase(encoding)) {
+                return HttpResponse.BodySubscribers.mapping(
+                    HttpResponse.BodySubscribers.ofByteArray(),
+                    bytes -> {
+                        try (var gis = new GZIPInputStream(new ByteArrayInputStream(bytes))) {
+                            return gis.readAllBytes();
+                        } catch (IOException e) {
+                            return bytes;
+                        }
+                    }
+                );
+            }
+            return HttpResponse.BodySubscribers.ofByteArray();
+        };
+    }
+
     private static String truncate(String s) {
         return s.length() > 200 ? s.substring(0, 200) : s;
+    }
+
+    /**
+     * A hand-built {@code multipart/form-data} request body — text fields plus
+     * file parts, encoded with a random boundary (RFC 7578). Built by resource
+     * services that upload files (fax send); applications never construct one
+     * directly. No external multipart dependency.
+     */
+    public static final class MultipartForm {
+        private final String boundary;
+        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        public MultipartForm() {
+            this.boundary = "voicetel-" + UUID.randomUUID().toString().replace("-", "");
+        }
+
+        /** Appends a plain text form field. */
+        public MultipartForm field(String name, String value) {
+            write(("--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"" + escape(name) + "\"\r\n"
+                + "\r\n"
+                + value + "\r\n").getBytes(StandardCharsets.UTF_8));
+            return this;
+        }
+
+        /** Appends a file part (binary content with its own media type). */
+        public MultipartForm file(String name, String filename, String contentType, byte[] bytes) {
+            write(("--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"" + escape(name)
+                + "\"; filename=\"" + escape(filename) + "\"\r\n"
+                + "Content-Type: " + contentType + "\r\n"
+                + "\r\n").getBytes(StandardCharsets.UTF_8));
+            write(bytes);
+            write("\r\n".getBytes(StandardCharsets.UTF_8));
+            return this;
+        }
+
+        /** Value for the Content-Type header (includes the boundary). */
+        public String contentType() {
+            return "multipart/form-data; boundary=" + boundary;
+        }
+
+        /** The fully encoded body, terminating boundary included. */
+        public byte[] encode() {
+            byte[] written = out.toByteArray();
+            byte[] end = ("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
+            byte[] result = Arrays.copyOf(written, written.length + end.length);
+            System.arraycopy(end, 0, result, written.length, end.length);
+            return result;
+        }
+
+        private void write(byte[] bytes) {
+            out.writeBytes(bytes);
+        }
+
+        private static String escape(String s) {
+            return s.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
     }
 }

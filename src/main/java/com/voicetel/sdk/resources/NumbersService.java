@@ -57,6 +57,29 @@ public final class NumbersService {
         return t.request("PUT", "/v2.2/numbers/" + encodePathSegment(number) + "/lidb", null, body, Numbers.LidbData.class, true);
     }
 
+    /** GET /v2.2/numbers/{number}/directory-listing — 411 listing state as published. */
+    public Numbers.DirectoryListingData getDirectoryListing(String number) {
+        return t.request("GET", "/v2.2/numbers/" + encodePathSegment(number) + "/directory-listing", null, Numbers.DirectoryListingData.class, true);
+    }
+
+    /**
+     * Adds or replaces the 411 directory listing. 202 Accepted — applied in
+     * the background ({@code status} "pending"); poll {@link #getDirectoryListing}
+     * until it reports "listed".
+     */
+    public Numbers.DirectoryListingData setDirectoryListing(String number, Numbers.DirectoryListingRequest body) {
+        return t.request("PUT", "/v2.2/numbers/" + encodePathSegment(number) + "/directory-listing", null, body, Numbers.DirectoryListingData.class, true);
+    }
+
+    /**
+     * Removes the published listing, or cancels an add not yet applied. 202
+     * Accepted — applied in the background ({@code status} "removing", or
+     * "not_listed" for a cancelled add, with no {@code orderId}).
+     */
+    public Numbers.DirectoryListingData removeDirectoryListing(String number) {
+        return t.request("DELETE", "/v2.2/numbers/" + encodePathSegment(number) + "/directory-listing", null, Numbers.DirectoryListingData.class, true);
+    }
+
     public Numbers.FaxData getFax(String number) {
         return t.request("GET", "/v2.2/numbers/" + encodePathSegment(number) + "/fax", null, Numbers.FaxData.class, true);
     }

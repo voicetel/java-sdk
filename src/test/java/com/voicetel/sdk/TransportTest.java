@@ -8,9 +8,14 @@ import com.sun.net.httpserver.HttpServer;
 import com.voicetel.sdk.models.Account;
 import com.voicetel.sdk.models.Acl;
 import com.voicetel.sdk.models.Common.CidrEntry;
+import com.voicetel.sdk.models.E911;
+import com.voicetel.sdk.models.Fax;
 import com.voicetel.sdk.models.INumbering;
+import com.voicetel.sdk.models.Lookups;
 import com.voicetel.sdk.models.Messaging;
 import com.voicetel.sdk.models.Numbers;
+import com.voicetel.sdk.resources.FaxService;
+import com.voicetel.sdk.resources.MessagingService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -154,16 +159,18 @@ class TransportTest {
 
     @Test
     void mapsStatusCodesToErrorKinds() {
-        for (var entry : Map.of(
-            400, ErrorKind.BAD_REQUEST,
-            401, ErrorKind.AUTHENTICATION,
-            403, ErrorKind.PERMISSION_DENIED,
-            404, ErrorKind.NOT_FOUND,
-            409, ErrorKind.CONFLICT,
-            429, ErrorKind.RATE_LIMIT,
-            500, ErrorKind.SERVER,
-            503, ErrorKind.SERVER,
-            418, ErrorKind.UNKNOWN).entrySet()) {
+        for (var entry : Map.ofEntries(
+            Map.entry(400, ErrorKind.BAD_REQUEST),
+            Map.entry(401, ErrorKind.AUTHENTICATION),
+            Map.entry(402, ErrorKind.PAYMENT_REQUIRED),
+            Map.entry(403, ErrorKind.PERMISSION_DENIED),
+            Map.entry(404, ErrorKind.NOT_FOUND),
+            Map.entry(409, ErrorKind.CONFLICT),
+            Map.entry(413, ErrorKind.REQUEST_TOO_LARGE),
+            Map.entry(429, ErrorKind.RATE_LIMIT),
+            Map.entry(500, ErrorKind.SERVER),
+            Map.entry(503, ErrorKind.SERVER),
+            Map.entry(418, ErrorKind.UNKNOWN)).entrySet()) {
             int status = entry.getKey();
             ErrorKind expected = entry.getValue();
             recorded.clear();
@@ -510,5 +517,451 @@ class TransportTest {
         assertNotNull(me.services());
         assertTrue(me.services().sms());
         assertNotNull(me.rates());
+    }
+
+    // ------------------------------------------------- v2.2.20 additions ---
+
+    private static final String LISTING_JSON =
+        "\"listing\":{\"type\":\"B\",\"name\":\"Acme Corp\","
+            + "\"streetNumber\":\"100\",\"streetName\":\"Broadway\",\"streetType\":\"St\","
+            + "\"streetSuffix\":\"\",\"location\":\"Suite 900\",\"city\":\"New York\","
+            + "\"state\":\"NY\",\"zip\":\"10005\",\"complex\":false}";
+
+    @Test
+    void directoryListingGetDecodesPublishedState() {
+        routes.put("GET /v2.2/numbers/2015550123/directory-listing", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"status\":\"listed\","
+                + "\"eligible\":true," + LISTING_JSON + ",\"pending\":null}}"));
+        var r = client(0, "k").numbers().getDirectoryListing("2015550123");
+        assertEquals("listed", r.status());
+        assertTrue(r.eligible());
+        assertEquals("B", r.listing().type());
+        assertEquals("Acme Corp", r.listing().name());
+        assertEquals("Suite 900", r.listing().location());
+        assertFalse(r.listing().complex());
+        assertNull(r.pending());
+        assertNull(r.orderId());
+    }
+
+    @Test
+    void directoryListingPutSendsBodyAndDecodes202() {
+        routes.put("PUT /v2.2/numbers/2015550123/directory-listing", (ex, body) -> {
+            assertTrue(body.contains("\"type\":\"business\""), "body was: " + body);
+            assertTrue(body.contains("\"name\":\"Acme Corp\""), "body was: " + body);
+            assertTrue(body.contains("\"city\":\"New York\""), "body was: " + body);
+            assertTrue(body.contains("\"zip\":\"10005\""), "body was: " + body);
+            // Only fields the caller set are emitted.
+            assertFalse(body.contains("firstName"), "body was: " + body);
+            assertFalse(body.contains("complex"), "body was: " + body);
+            respond(ex, 202,
+                "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"status\":\"pending\","
+                    + "\"orderId\":\"1026472\",\"listing\":{\"type\":\"B\",\"name\":\"Acme Corp\","
+                    + "\"streetNumber\":\"100\",\"streetName\":\"Broadway\",\"streetType\":\"St\","
+                    + "\"streetSuffix\":\"\",\"location\":\"Suite 900\",\"city\":\"New York\","
+                    + "\"state\":\"NY\",\"zip\":\"10005\"}}}");
+        });
+        var r = client(0, "k").numbers().setDirectoryListing("2015550123",
+            new Numbers.DirectoryListingRequest(
+                "business", "Acme Corp", null, null,
+                "100", "Broadway", "St", null, "Suite 900",
+                "New York", "NY", "10005"));
+        // 202 is a success; the change is applied in the background.
+        assertEquals("pending", r.status());
+        assertEquals("1026472", r.orderId());
+        assertEquals("Acme Corp", r.listing().name());
+        assertNull(r.listing().complex(), "the echoed listing carries no complex flag");
+    }
+
+    @Test
+    void directoryListingDeleteDecodes202AndCancel() {
+        routes.put("DELETE /v2.2/numbers/2015550123/directory-listing", (ex, body) -> respond(ex, 202,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"status\":\"removing\","
+                + "\"orderId\":\"1026473\"}}"));
+        var r = client(0, "k").numbers().removeDirectoryListing("2015550123");
+        assertEquals("removing", r.status());
+        assertEquals("1026473", r.orderId());
+
+        routes.remove("DELETE /v2.2/numbers/2015550123/directory-listing");
+        routes.put("DELETE /v2.2/numbers/2015550177/directory-listing", (ex, body) -> respond(ex, 202,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550177\",\"status\":\"not_listed\"}}"));
+        var cancel = client(0, "k").numbers().removeDirectoryListing("2015550177");
+        assertEquals("not_listed", cancel.status());
+        assertNull(cancel.orderId(), "a cancelled add creates no carrier order");
+    }
+
+    @Test
+    void carrierLookupDecodesUpstreamSnakeCaseFields() {
+        routes.put("GET /v2.2/carrier/2015550123", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\","
+                + "\"carrier\":{\"name\":\"EXAMPLE CARRIER\",\"type\":\"voip\","
+                + "\"mobile_country_code\":null,\"mobile_network_code\":null,\"error_code\":null}}}"));
+        Lookups.CarrierData r = client(0, "k").lookups().carrier("2015550123");
+        assertEquals("2015550123", r.number());
+        assertEquals("EXAMPLE CARRIER", r.carrier().name());
+        assertEquals("voip", r.carrier().type());
+        assertNull(r.carrier().mobileCountryCode());
+        assertNull(r.carrier().mobileNetworkCode());
+        assertNull(r.carrier().errorCode());
+
+        routes.remove("GET /v2.2/carrier/2015550123");
+        routes.put("GET /v2.2/carrier/2015550100", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550100\","
+                + "\"carrier\":{\"name\":\"MOBILE CARRIER\",\"type\":\"mobile\","
+                + "\"mobile_country_code\":\"310\",\"mobile_network_code\":\"456\",\"error_code\":0}}}"));
+        Lookups.CarrierData mobile = client(0, "k").lookups().carrier("2015550100");
+        assertEquals("310", mobile.carrier().mobileCountryCode());
+        assertEquals("456", mobile.carrier().mobileNetworkCode());
+        assertEquals(0, mobile.carrier().errorCode());
+    }
+
+    @Test
+    void lrnDipWithNoRecordReturns200WithNullLrn() {
+        // v2.2.21: a failed LRN dip is still HTTP 200 (and still billed) with
+        // lrn:null — the record component must hold null without throwing.
+        routes.put("GET /v2.2/lrn/2015550123/2015550100", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"ani\":\"2015550100\","
+                + "\"destination\":\"2015550123\",\"lrn\":null}}"));
+        Lookups.LrnLookupData r = client(0, "k").lookups().lrn("2015550123", "2015550100");
+        assertEquals("2015550100", r.ani());
+        assertEquals("2015550123", r.destination());
+        assertNull(r.lrn(), "lrn must be null when the dip found no record");
+    }
+
+    @Test
+    void e911AddressidRoundTripsAsString() {
+        // v2.2.20: the validated-address id is a hex string, not an integer,
+        // on both the validation response and the provision-by-id request.
+        routes.put("POST /v2.2/e911/validations", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"address\":{"
+                + "\"addressid\":\"123a45b678c9d012e3f45a67b890c123\","
+                + "\"address1\":\"100 Broadway\",\"city\":\"New York\","
+                + "\"state\":\"NY\",\"zip\":\"10005\"}}}"));
+        routes.put("PUT /v2.2/e911/2015550123", (ex, body) -> {
+            assertTrue(body.contains("\"addressid\":\"123a45b678c9d012e3f45a67b890c123\""),
+                "addressid must be sent as a string, body was: " + body);
+            respond(ex, 200,
+                "{\"status\":\"success\",\"data\":{\"record\":{\"dn\":\"12015550123\",\"callername\":\"Acme\"}}}");
+        });
+
+        E911.ValidateData v = client(0, "k").e911()
+            .validate(new E911.AddressRequest("100 Broadway", null, "New York", "NY", "10005"));
+        assertEquals("123a45b678c9d012e3f45a67b890c123", v.address().addressid());
+        E911.RecordData p = client(0, "k").e911()
+            .provision("2015550123", new E911.ProvisionByIdRequest("Acme", v.address().addressid()));
+        assertEquals("Acme", p.record().callername());
+    }
+
+    @Test
+    void ordersCreateDecodesRoutes() {
+        // v2.2.20: POST /v2.2/orders returns the route each ordered number
+        // was placed on.
+        routes.put("POST /v2.2/orders", (ex, body) -> respond(ex, 201,
+            "{\"status\":\"success\",\"data\":{\"orderId\":\"ORD-1\",\"amountCharged\":1.0,"
+                + "\"numbersOrdered\":[\"2015550100\"],\"failed\":[],"
+                + "\"routes\":[{\"number\":\"2015550100\",\"route\":4}]}}"));
+        INumbering.OrderCreateData r = client(0, "k").iNumbering()
+            .order(new INumbering.OrderCreateRequest(
+                List.of(INumbering.OrderNumber.of("2015550100"))));
+        assertEquals(1, r.routes().size());
+        assertEquals("2015550100", r.routes().get(0).number());
+        assertEquals(4, r.routes().get(0).route());
+    }
+
+    @Test
+    void messageSendMediaOnlyMmsOmitsText() throws Exception {
+        // v2.2.20: text is optional (media-only MMS is valid) and nulls are
+        // not serialized.
+        routes.put("POST /v2.2/messages", (ex, body) -> {
+            JsonNode sent = new ObjectMapper().readTree(body);
+            assertFalse(sent.has("text"), "media-only MMS must omit text, body was: " + body);
+            assertFalse(sent.has("subject"), "body was: " + body);
+            assertEquals(List.of("https://example.com/photo.jpg"),
+                new ObjectMapper().convertValue(sent.get("mediaUrls"), List.class));
+            respond(ex, 202,
+                "{\"status\":\"success\",\"data\":{\"id\":\"m-1\",\"type\":\"mms\","
+                    + "\"fromNumber\":\"2015550123\",\"toNumber\":\"2015550100\",\"parts\":1}}");
+        });
+        Messaging.SendData r = client(0, "k").messaging().send(new Messaging.SendRequest(
+            "2015550123", "2015550100", null, null,
+            List.of("https://example.com/photo.jpg")));
+        assertEquals("mms", r.type());
+        assertEquals(1, r.parts());
+    }
+
+    @Test
+    void messageHistoryValueDecodesV2220Fields() {
+        routes.put("GET /v2.2/messages", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"type\":\"dlr\","
+                + "\"messages\":[{\"id\":\"r1\",\"key\":[\"12015550123\",1747345100],"
+                + "\"value\":{\"sourceNumber\":\"12015550123\",\"destinationNumber\":\"12015550100\","
+                + "\"messageText\":\"stat:DELIVRD\",\"transactionGUID\":\"g-1\","
+                + "\"concatenatedMessage\":\"2\"}}"
+                + ",{\"id\":\"m2\",\"key\":[1,\"2015550123\",1747345200],"
+                + "\"value\":{\"direction\":\"in\",\"number\":\"2015550123\",\"message\":\"\","
+                + "\"attachments\":[{\"contentFile\":\"https://x/f.jpg\",\"contentType\":\"image/jpeg\"}],"
+                + "\"subject\":\"Photo\",\"ip\":null}}]}}"));
+        Messaging.HistoryData r = client(0, "k").messaging()
+            .history(MessagingService.HistoryOptions.forNumber("2015550123"));
+
+        Messaging.RecordValue dlr = r.messages().get(0).value();
+        assertEquals("stat:DELIVRD", dlr.messageText());
+        assertEquals("g-1", dlr.transactionGUID());
+        assertEquals("2", dlr.concatenatedMessage());
+
+        Messaging.RecordValue mms = r.messages().get(1).value();
+        assertEquals("Photo", mms.subject());
+        assertNull(mms.ip());
+        assertTrue(mms.attachments() instanceof List, "inbound attachments decode as an array");
+    }
+
+    // ------------------------------------------------- v2.2.21 additions ---
+
+    @Test
+    void aclRemoveSendsAclJsonBodyWithoutCidrsQuery() {
+        // v2.2.21: DELETE /v2.2/acl takes the same {"acl":[{cidr}]} body as
+        // POST /v2.2/acl; the old cidrs query parameter is not read.
+        routes.put("DELETE /v2.2/acl", (ex, body) -> {
+            assertEquals("{\"acl\":[{\"cidr\":\"203.0.113.0/24\"},{\"cidr\":\"198.51.100.7/32\"}]}", body);
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"removed\":[{\"cidr\":\"203.0.113.0/24\"}]}}");
+        });
+        Acl.RemoveData r = client(0, "k").acl().remove(List.of("203.0.113.0/24", "198.51.100.7/32"));
+        assertEquals(1, r.removed().size());
+        assertEquals("203.0.113.0/24", r.removed().get(0).cidr());
+
+        var req = recorded.get(0);
+        assertNull(req.query(), "the cidrs query parameter is gone in v2.2.21");
+        assertEquals("application/json", req.headers().get("content-type"));
+    }
+
+    @Test
+    void aclRemoveAcceptsModifyRequestBody() {
+        routes.put("DELETE /v2.2/acl", (ex, body) -> {
+            assertEquals("{\"acl\":[{\"cidr\":\"203.0.113.0/24\"}]}", body);
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"removed\":[{\"cidr\":\"203.0.113.0/24\"}]}}");
+        });
+        Acl.RemoveData r = client(0, "k").acl()
+            .remove(new Acl.ModifyRequest(List.of(new CidrEntry("203.0.113.0/24"))));
+        assertEquals("203.0.113.0/24", r.removed().get(0).cidr());
+        assertNull(recorded.get(0).query());
+    }
+
+    @Test
+    void aclRemoveConflictCarriesRemovedAndFailedData() throws Exception {
+        routes.put("DELETE /v2.2/acl", (ex, body) -> respond(ex, 409,
+            "{\"status\":\"error\",\"error\":{\"code\":409,\"message\":\"One or more ACL entries could not be removed\"},"
+                + "\"data\":{\"removed\":[{\"cidr\":\"203.0.113.0/24\"}],"
+                + "\"failed\":[{\"cidr\":\"203.0.113.9/32\",\"reason\":\"DB delete failed\"}]}}"));
+        ApiError e = assertThrows(ApiError.class,
+            () -> client(0, "k").acl().remove(List.of("203.0.113.0/24", "203.0.113.9/32")));
+        assertTrue(e.isConflict());
+        assertEquals(409L, e.getCode());
+        JsonNode root = Transport.MAPPER.convertValue(e.getBody(), JsonNode.class);
+        Acl.ConflictData conflict = Transport.MAPPER.treeToValue(root.get("data"), Acl.ConflictData.class);
+        assertEquals(1, conflict.removed().size());
+        assertEquals("203.0.113.0/24", conflict.removed().get(0).cidr());
+        assertEquals("203.0.113.9/32", conflict.failed().get(0).cidr());
+        assertEquals("DB delete failed", conflict.failed().get(0).reason());
+    }
+
+    @Test
+    void faxNumbersListDecodesEntries() {
+        routes.put("GET /v2.2/numbers/fax", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"numbers\":["
+                + "{\"number\":\"2015550123\",\"destinationId\":7,\"email\":\"fax@example.com\"},"
+                + "{\"number\":\"2125550123\",\"destinationId\":0,\"email\":\"account@example.com\"}]}}"));
+        Fax.NumbersData r = client(0, "k").fax().listNumbers();
+        assertEquals(2, r.numbers().size());
+        assertEquals("2015550123", r.numbers().get(0).number());
+        assertEquals(7, r.numbers().get(0).destinationId());
+        assertEquals("fax@example.com", r.numbers().get(0).email());
+        assertEquals(0, r.numbers().get(1).destinationId(), "destinationId 0 = account email");
+    }
+
+    @Test
+    void faxSendPostsMultipartWithUuidIdempotencyKey() {
+        byte[] pdf = "%PDF-1.7 mock fax document".getBytes(StandardCharsets.UTF_8);
+        routes.put("POST /v2.2/faxes", (ex, body) -> {
+            String contentType = ex.getRequestHeaders().getFirst("Content-Type");
+            assertTrue(contentType.startsWith("multipart/form-data; boundary="),
+                "content-type must be multipart, was: " + contentType);
+            String key = ex.getRequestHeaders().getFirst("Idempotency-Key");
+            assertNotNull(key, "Idempotency-Key is required on fax send");
+            assertTrue(
+                key.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),
+                "Idempotency-Key must be a UUID, was: " + key);
+
+            String boundary = contentType.substring(contentType.indexOf("boundary=") + "boundary=".length());
+            // The boundary delimits the two text fields, the file part, and
+            // the terminating marker (split leaves an empty leading segment).
+            String[] segments = body.split("--" + boundary);
+            assertEquals(5, segments.length, "multipart body was:\n" + body);
+            String all = String.join("\n", segments);
+            assertTrue(all.contains("name=\"fromNumber\""), "body was:\n" + body);
+            assertTrue(all.contains("2015550123"), "body was:\n" + body);
+            assertTrue(all.contains("name=\"toNumber\""), "body was:\n" + body);
+            assertTrue(all.contains("2125550123"), "body was:\n" + body);
+            assertTrue(all.contains("name=\"documents\"; filename=\"contract.pdf\""), "body was:\n" + body);
+            assertTrue(all.contains("Content-Type: application/pdf"), "body was:\n" + body);
+            assertTrue(all.contains("%PDF-1.7 mock fax document"), "body was:\n" + body);
+
+            respond(ex, 201, "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\","
+                + "\"fromNumber\":\"2015550123\",\"toNumber\":\"2125550123\",\"status\":\"queued\","
+                + "\"documents\":[{\"name\":\"contract.pdf\",\"size\":26,\"contentType\":\"application/pdf\"}]}}");
+        });
+        Fax.SendData r = client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", pdf)));
+        assertEquals("9f8c2b41a", r.id());
+        assertEquals("queued", r.status());
+        assertEquals("contract.pdf", r.documents().get(0).name());
+        assertEquals(26L, r.documents().get(0).size());
+    }
+
+    @Test
+    void faxSendUsesCallerSuppliedIdempotencyKey() {
+        routes.put("POST /v2.2/faxes", (ex, body) -> {
+            assertEquals("123e4567-e89b-12d3-a456-426614174000",
+                ex.getRequestHeaders().getFirst("Idempotency-Key"));
+            respond(ex, 201, "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\",\"status\":\"queued\",\"documents\":[]}}");
+        });
+        Fax.SendData r = client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'})),
+            "123e4567-e89b-12d3-a456-426614174000");
+        assertEquals("9f8c2b41a", r.id());
+    }
+
+    @Test
+    void faxSendRetryReusesTheSameIdempotencyKey() {
+        // The key pins the submission across retries, so a retried send can
+        // never deliver the same fax twice.
+        AtomicInteger calls = new AtomicInteger();
+        List<String> keys = new ArrayList<>();
+        routes.put("POST /v2.2/faxes", (ex, body) -> {
+            keys.add(ex.getRequestHeaders().getFirst("Idempotency-Key"));
+            if (calls.incrementAndGet() == 1) {
+                respond(ex, 502, "{\"status\":\"error\",\"error\":{\"code\":502,\"message\":\"processor\"}}");
+                return;
+            }
+            respond(ex, 201, "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\",\"status\":\"queued\",\"documents\":[]}}");
+        });
+        Fax.SendData r = client(1, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'})));
+        assertEquals("9f8c2b41a", r.id());
+        assertEquals(2, calls.get());
+        assertEquals(keys.get(0), keys.get(1), "retries must reuse the Idempotency-Key");
+    }
+
+    @Test
+    void faxHistorySendsQueryParameters() {
+        routes.put("GET /v2.2/faxes", (ex, body) -> {
+            assertEquals("number=2015550123&from=1795100000&to=1795013600&limit=50&cursor=cur1&status=failed",
+                ex.getRequestURI().getRawQuery());
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\","
+                + "\"fromTs\":1795100000,\"toTs\":1795013600,\"faxes\":[],\"nextCursor\":null}}");
+        });
+        Fax.HistoryData r = client(0, "k").fax().history(new FaxService.HistoryOptions(
+            "2015550123", 1795100000L, 1795013600L, 50, "cur1", "failed"));
+        assertEquals("2015550123", r.number());
+        assertEquals(1795100000L, r.fromTs());
+        assertNull(r.nextCursor());
+    }
+
+    @Test
+    void faxHistoryForNumberSendsOnlyTheRequiredParameter() {
+        routes.put("GET /v2.2/faxes", (ex, body) -> {
+            assertEquals("number=2015550123", ex.getRequestURI().getRawQuery());
+            respond(ex, 200, "{\"status\":\"success\",\"data\":{\"number\":\"2015550123\",\"faxes\":[]}}");
+        });
+        client(0, "k").fax().history("2015550123");
+    }
+
+    @Test
+    void faxGetDecodesFullJob() {
+        routes.put("GET /v2.2/faxes/9f8c2b41a", (ex, body) -> respond(ex, 200,
+            "{\"status\":\"success\",\"data\":{\"id\":\"9f8c2b41a\",\"fromNumber\":\"2015550123\","
+                + "\"toNumber\":\"2125550123\",\"clientToken\":\"123e4567-e89b-12d3-a456-426614174000\","
+                + "\"status\":\"sent\",\"submittedAt\":\"2026-11-20T15:04:05Z\","
+                + "\"startedAt\":\"2026-11-20T15:04:41Z\",\"completedAt\":\"2026-11-20T15:05:19Z\","
+                + "\"attempts\":1,\"failureReason\":null,"
+                + "\"documents\":[{\"name\":\"contract.pdf\",\"size\":123456,\"contentType\":\"application/pdf\"}],"
+                + "\"documentAvailable\":true,\"documentName\":\"contract.pdf\",\"documentSize\":123456}}"));
+        Fax.Job job = client(0, "k").fax().get("9f8c2b41a");
+        assertEquals("9f8c2b41a", job.id());
+        assertEquals("2015550123", job.fromNumber());
+        assertEquals("2125550123", job.toNumber());
+        assertEquals("123e4567-e89b-12d3-a456-426614174000", job.clientToken());
+        assertEquals("sent", job.status());
+        assertEquals("2026-11-20T15:04:05Z", job.submittedAt());
+        assertEquals("2026-11-20T15:05:19Z", job.completedAt());
+        assertEquals(1, job.attempts());
+        assertNull(job.failureReason());
+        assertEquals(1, job.documents().size());
+        assertEquals("contract.pdf", job.documents().get(0).name());
+        assertTrue(job.documentAvailable());
+        assertEquals("contract.pdf", job.documentName());
+        assertEquals(123456L, job.documentSize());
+    }
+
+    @Test
+    void faxDocumentReturnsRawPdfBytes() throws Exception {
+        // A payload with every byte value proves the document download hands
+        // back raw bytes, never a mangled string.
+        byte[] pdf = new byte[256];
+        for (int i = 0; i < pdf.length; i++) pdf[i] = (byte) i;
+        routes.put("GET /v2.2/faxes/9f8c2b41a/document", (ex, body) -> {
+            ex.getResponseHeaders().set("Content-Type", "application/pdf");
+            ex.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"contract.pdf\"");
+            ex.sendResponseHeaders(200, pdf.length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(pdf);
+            }
+            ex.close();
+        });
+        byte[] got = client(0, "k").fax().document("9f8c2b41a");
+        assertArrayEquals(pdf, got);
+    }
+
+    @Test
+    void faxErrorEnvelopeWithServerTimeMapsToTypedError() {
+        // The fax endpoints add "serverTime" beside status/error; error
+        // decoding must tolerate it and still pull code/message.
+        routes.put("GET /v2.2/faxes/missing001", (ex, body) -> respond(ex, 404,
+            "{\"status\":\"error\",\"error\":{\"code\":404,\"message\":\"Not found\"},\"serverTime\":1795100000}"));
+        ApiError e = assertThrows(ApiError.class, () -> client(0, "k").fax().get("missing001"));
+        assertTrue(e.isNotFound());
+        assertEquals("Not found", e.getMessage());
+        assertEquals(404L, e.getCode());
+    }
+
+    @Test
+    void faxDocument404RaisesTypedApiError() {
+        routes.put("GET /v2.2/faxes/none000001/document", (ex, body) -> respond(ex, 404,
+            "{\"status\":\"error\",\"error\":{\"code\":404,\"message\":\"Not found\"},\"serverTime\":1795100000}"));
+        ApiError e = assertThrows(ApiError.class, () -> client(0, "k").fax().document("none000001"));
+        assertTrue(e.isNotFound());
+        assertEquals("Not found", e.getMessage());
+    }
+
+    @Test
+    void faxSendMaps402And413ToTypedErrorKinds() {
+        // v2.2.21: 402 — the balance must be positive to send a fax;
+        // 413 — the documents must total 8 MiB or smaller.
+        routes.put("POST /v2.2/faxes", (ex, body) -> respond(ex, 402,
+            "{\"status\":\"error\",\"error\":{\"code\":402,"
+            + "\"message\":\"Your account needs a positive balance to send faxes.\"},\"serverTime\":1795100000}"));
+        ApiError e402 = assertThrows(ApiError.class, () -> client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'}))));
+        assertEquals(ErrorKind.PAYMENT_REQUIRED, e402.getKind());
+        assertEquals(402, e402.getStatusCode());
+        assertEquals(402L, e402.getCode());
+
+        routes.clear();
+        routes.put("POST /v2.2/faxes", (ex, body) -> respond(ex, 413,
+            "{\"status\":\"error\",\"error\":{\"code\":413,"
+            + "\"message\":\"The documents must total 8 MiB or smaller\"},\"serverTime\":1795100000}"));
+        ApiError e413 = assertThrows(ApiError.class, () -> client(0, "k").fax().send("2015550123", "2125550123",
+            List.of(new Fax.Document("contract.pdf", "application/pdf", new byte[] {'x'}))));
+        assertEquals(ErrorKind.REQUEST_TOO_LARGE, e413.getKind());
+        assertEquals(413, e413.getStatusCode());
+        assertEquals(413L, e413.getCode());
     }
 }

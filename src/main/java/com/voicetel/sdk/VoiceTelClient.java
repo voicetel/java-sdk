@@ -5,6 +5,7 @@ import com.voicetel.sdk.resources.AccountService;
 import com.voicetel.sdk.resources.AclService;
 import com.voicetel.sdk.resources.AuthenticationService;
 import com.voicetel.sdk.resources.E911Service;
+import com.voicetel.sdk.resources.FaxService;
 import com.voicetel.sdk.resources.GatewaysService;
 import com.voicetel.sdk.resources.LookupsService;
 import com.voicetel.sdk.resources.MessagingService;
@@ -33,6 +34,7 @@ public final class VoiceTelClient {
     private final AclService acl;
     private final AuthenticationService authentication;
     private final E911Service e911;
+    private final FaxService fax;
     private final GatewaysService gateways;
     private final INumberingService iNumbering;
     private final LookupsService lookups;
@@ -51,6 +53,7 @@ public final class VoiceTelClient {
         this.acl = new AclService(transport);
         this.authentication = new AuthenticationService(transport);
         this.e911 = new E911Service(transport);
+        this.fax = new FaxService(transport);
         this.gateways = new GatewaysService(transport);
         this.iNumbering = new INumberingService(transport);
         this.lookups = new LookupsService(transport);
@@ -63,6 +66,7 @@ public final class VoiceTelClient {
     public AclService acl() { return acl; }
     public AuthenticationService authentication() { return authentication; }
     public E911Service e911() { return e911; }
+    public FaxService fax() { return fax; }
     public GatewaysService gateways() { return gateways; }
     public INumberingService iNumbering() { return iNumbering; }
     public LookupsService lookups() { return lookups; }
